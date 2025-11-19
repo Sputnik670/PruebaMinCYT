@@ -1,0 +1,16 @@
+# Archivos de Entornos Virtuales
+venv/
+.venv/
+__pycache__/
+
+# Archivos de Build
+*.pyc
+*.log
+*.sqlite3
+/dist
+/build
+
+# Archivos de Node/React
+node_modules/
+npm-debug.log
+.DS_Store
