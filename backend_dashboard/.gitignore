@@ -1,16 +1,24 @@
-# Archivos de Entornos Virtuales
+# --- SEGURIDAD (CRÍTICO) ---
+# Nunca subir estas llaves a GitHub
+.env
+service_account.json
+client_secret.json
+credentials.json
+
+# --- Archivos de Entornos Virtuales ---
 venv/
 .venv/
 __pycache__/
 
-# Archivos de Build
+# --- Archivos de Build y Temporales ---
 *.pyc
 *.log
 *.sqlite3
 /dist
 /build
 
-# Archivos de Node/React
+# --- Archivos de Node/React ---
 node_modules/
 npm-debug.log
 .DS_Store
+```
