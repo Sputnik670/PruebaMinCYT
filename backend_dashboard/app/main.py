@@ -1,4 +1,4 @@
-mport pandas as pd
+import pandas as pd
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -14,8 +14,8 @@ app.add_middleware(
 # --- TUS ENLACES DE GOOGLE SHEETS ---
 # NOTA: Asegúrate de que URL_PROYECTOS apunte al enlace CSV de tu hoja "Proyectos"
 # Utiliza la URL de la hoja Proyectos para ambas variables si solo tienes esa hoja.
-URL_BITACORA = "https://docs.google.com/spreadsheets/d/e/2PACX-1vR0-Uk3fi9iIO1XHja2j3nFlcy4NofCDsjzPh69-4D1jJkDUwq7E5qY1S201_e_0ODIk5WksS_ezYHi/pubhtml?gid=643804140&single=true" 
-URL_VENTAS = "https://docs.google.com/spreadsheets/d/e/2PACX-1vR0-Uk3fi9iIO1XHja2j3nFlcy4NofCDsjzPh69-4D1jJkDUwq7E5qY1S201_e_0ODIk5WksS_ezYHi/pubhtml?gid=0&single=true" 
+URL_BITACORA = "https://docs.google.com/spreadsheets/d/e/2PACX-1vR0-Uk3fi9iIO1XHja2j3nFlcy4NofCDsjzPh69-4D1jJkDUwq7E5qY1S201_e_0ODIk5WksS_ezYHi/pub?gid=643804140&single=true&output=csv" 
+URL_VENTAS = "https://docs.google.com/spreadsheets/d/e/2PACX-1vR0-Uk3fi9iIO1XHja2j3nFlcy4NofCDsjzPh69-4D1jJkDUwq7E5qY1S201_e_0ODIk5WksS_ezYHi/pub?gid=0&single=true&output=csv" 
 
 def leer_google_sheet(url):
     """Función reutilizable para leer cualquier sheet como tabla cruda."""
