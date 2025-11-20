@@ -10,7 +10,7 @@ function App() {
   const [error, setError] = useState(null);
 
   // URL FIJA DE RENDER (El Backend que acabamos de crear)
-  const API_URL = "https://prueba-mincyt.onrender.com";
+  const API_URL = "https://pruebamincyt.onrender.com";
 
   useEffect(() => {
     console.log("📡 Conectando al nuevo backend...");
