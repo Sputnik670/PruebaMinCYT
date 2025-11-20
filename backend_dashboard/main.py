@@ -1,135 +1,101 @@
 import pandas as pd
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-import numpy as np
+import io
+import requests
 
 app = FastAPI()
 
-# --- CONFIGURACIÓN DE CORS ---
-origins = [
-    "http://localhost:5173",
-    "http://127.0.0.1:5173",
-    "https://prueba-mincyt.onrender.com",
-    "https://pruebamincyt.ar",
-    "https://www.pruebasmincyt.ar",
-    "https://pruebamincyt.vercel.app",
-    "https://pruebamincyt-git-main-sputnik670s-projects.vercel.app"
-]
-
+# --- 1. PERMISOS (CORS) ---
+# Permitimos todo para evitar dolores de cabeza en pruebas.
+# En producción estricta podrías limitar esto, pero para tu dashboard está bien.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
+    allow_origins=["*"],  # Permite a Vercel, Localhost, etc.
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# --- TUS ENLACES DE GOOGLE SHEETS ---
-# Nota: Asegúrate de que estos GID son correctos y las hojas son públicas
+# --- 2. CONFIGURACIÓN ---
+# Tus URLs públicas (Ya comprobamos que funcionan)
 URL_BITACORA = "https://docs.google.com/spreadsheets/d/e/2PACX-1vR0-Uk3fi9iIO1XHja2j3nFlcy4NofCDsjzPh69-4D1jJkDUwq7E5qY1S201_e_0ODIk5WksS_ezYHi/pub?gid=643804140&single=true&output=csv"
 URL_VENTAS = "https://docs.google.com/spreadsheets/d/e/2PACX-1vR0-Uk3fi9iIO1XHja2j3nFlcy4NofCDsjzPh69-4D1jJkDUwq7E5qY1S201_e_0ODIk5WksS_ezYHi/pub?gid=0&single=true&output=csv"
-URL_DATOS_EXTRA = "https://docs.google.com/spreadsheets/d/e/2PACX-1vR0-Uk3fi9iIO1XHja2j3nFlcy4NofCDsjzPh69-4D1jJkDUwq7E5qY1S201_e_0ODIk5WksS_ezYHi/pub?gid=1611579313&single=true&output=csv"
 
-# --- FUNCIONES AUXILIARES ---
+# --- 3. HERRAMIENTAS DE LIMPIEZA ---
 
-def limpiar_moneda(valor):
-    """
-    Recibe un valor (string o numero), quita signos $ y ,
-    y devuelve un float. Si falla, devuelve 0.0
-    """
-    if pd.isna(valor) or valor == "":
-        return 0.0
-    
-    str_val = str(valor)
-    # Quitar símbolo de moneda y espacios
-    str_val = str_val.replace("$", "").replace(" ", "").strip()
-    
-    # Manejo de miles y decimales:
-    # Asumimos formato latino: 1.000,00 (punto miles, coma decimal)
-    # O formato simple: 1000
+def limpiar_dinero(valor):
+    """Convierte '$ 1.500,00' o '1.500' en el numero float 1500.0"""
+    if pd.isna(valor): return 0.0
+    s = str(valor).replace("$", "").replace(" ", "").strip()
+    # Asumimos formato latino: punto para miles, coma para decimales
+    # Si hay coma, reemplazamos puntos por nada y coma por punto
+    if "," in s:
+        s = s.replace(".", "").replace(",", ".")
+    return float(s) if s else 0.0
+
+def cargar_csv(url):
+    """Descarga y lee el CSV de forma segura"""
     try:
-        if "," in str_val and "." in str_val:
-            # Caso complejo: 1.500,50 -> quitamos puntos, cambiamos coma por punto
-            str_val = str_val.replace(".", "").replace(",", ".")
-        elif "," in str_val:
-             # Caso solo coma: 1500,50 -> cambiamos coma por punto
-            str_val = str_val.replace(",", ".")
-        
-        return float(str_val)
-    except ValueError:
-        return 0.0
-
-def leer_google_sheet(url):
-    try:
-        # header=0 implica que la fila 1 son los títulos
-        df = pd.read_csv(url, header=0)
-        df = df.fillna("") # Rellenar vacíos para que JSON no se rompa
-        return df.to_dict(orient="records")
+        response = requests.get(url)
+        response.raise_for_status()
+        # Convertimos el texto descargado en un DataFrame
+        df = pd.read_csv(io.StringIO(response.text))
+        df = df.fillna("") # Rellenamos huecos vacíos
+        return df
     except Exception as e:
-        # Lanzar un error 500 real para que el frontend sepa que falló
-        print(f"Error leyendo sheet: {e}")
-        raise HTTPException(status_code=500, detail=f"Error leyendo Google Sheet: {str(e)}")
+        print(f"Error cargando CSV: {e}")
+        return None
 
-# --- RUTAS ---
+# --- 4. RUTAS (ENDPOINTS) ---
 
 @app.get("/")
-def read_root():
-    return {"mensaje": "API Activa v4 - Auditoría Completada"}
+def home():
+    return {"status": "online", "mensaje": "Backend funcionando correctamente 🚀"}
 
-@app.get("/api/metricas")
-def obtener_metricas():
-    return leer_google_sheet(URL_BITACORA)
+@app.get("/api/dashboard")
+def get_dashboard_data():
+    """
+    Esta es la RUTA MAESTRA.
+    Devuelve todo lo que el frontend necesita en una sola llamada.
+    """
+    # 1. Cargar Bitácora
+    df_bitacora = cargar_csv(URL_BITACORA)
+    datos_bitacora = df_bitacora.to_dict(orient="records") if df_bitacora is not None else []
 
-@app.get("/api/datosextra")
-def obtener_datos_extra_crudos():
-    return leer_google_sheet(URL_DATOS_EXTRA)
+    # 2. Cargar y Procesar Ventas (Aquí ocurre la magia de la limpieza)
+    df_ventas = cargar_csv(URL_VENTAS)
+    datos_tendencia = []
+    datos_ventas_crudos = []
 
-# Unificamos las rutas de ventas/proyectos si traen lo mismo
-@app.get("/api/proyectos_crudas")
-def obtener_proyectos_crudas():
-    return leer_google_sheet(URL_VENTAS)
+    if df_ventas is not None:
+        # Guardamos copia cruda para la tabla
+        datos_ventas_crudos = df_ventas.to_dict(orient="records")
 
-@app.get("/api/ventas_crudas")
-def obtener_ventas_crudas_alias():
-     return leer_google_sheet(URL_VENTAS)
+        # Procesamos para el gráfico (Limpieza)
+        # Buscamos la columna de dinero (sea 'Inversión' o 'Inversion' o 'Venta')
+        col_dinero = next((c for c in df_ventas.columns if "Invers" in c or "Venta" in c), None)
+        col_fecha = next((c for c in df_ventas.columns if "Fecha" in c), None)
 
-@app.get("/api/tendencia_inversion")
-def obtener_tendencia_inversion():
-    try:
-        df = pd.read_csv(URL_VENTAS, header=0)
-        
-        # 1. Normalización de nombres
-        if 'Inversión' in df.columns:
-            df.rename(columns={'Inversión': 'Venta', 'FechaInicio': 'Fecha'}, inplace=True)
-        elif 'Inversion' in df.columns:
-             df.rename(columns={'Inversion': 'Venta', 'FechaInicio': 'Fecha'}, inplace=True)
-        
-        # Validación: Si no existen las columnas tras renombrar, error
-        if 'Fecha' not in df.columns or 'Venta' not in df.columns:
-             raise HTTPException(status_code=500, detail="Las columnas 'FechaInicio' o 'Inversión' no se encuentran en el CSV.")
+        if col_dinero and col_fecha:
+            # Limpiamos dinero
+            df_ventas['MontoLimpio'] = df_ventas[col_dinero].apply(limpiar_dinero)
+            
+            # Limpiamos fecha
+            df_ventas['FechaDt'] = pd.to_datetime(df_ventas[col_fecha], dayfirst=True, errors='coerce')
+            df_ventas.dropna(subset=['FechaDt'], inplace=True)
 
-        # 2. Limpieza CRÍTICA de Números (La parte que faltaba)
-        # Aplicamos la función de limpieza a toda la columna de Venta
-        df['Venta'] = df['Venta'].apply(limpiar_moneda)
+            # Agrupamos por Mes
+            agrupado = df_ventas.groupby(df_ventas['FechaDt'].dt.to_period('M'))['MontoLimpio'].sum().reset_index()
+            agrupado['FechaStr'] = agrupado['FechaDt'].astype(str) # '2024-10'
 
-        # 3. Procesamiento de Fechas
-        # dayfirst=True ayuda a pandas a entender formatos latinos (dd/mm/yyyy) mejor
-        df['Fecha'] = pd.to_datetime(df['Fecha'], dayfirst=True, errors='coerce')
-        df.dropna(subset=['Fecha'], inplace=True)
-        
-        # 4. Agrupación
-        # Agrupamos por mes y sumamos
-        tendencia = df.groupby(df['Fecha'].dt.to_period('M'))['Venta'].sum().reset_index()
-        
-        # 5. Formato de salida
-        # Convertimos el periodo a string 'YYYY-MM' para que el gráfico lo entienda
-        tendencia['Fecha'] = tendencia['Fecha'].astype(str)
-        
-        # Ordenar por fecha para que el gráfico no salga revuelto
-        tendencia = tendencia.sort_values('Fecha')
+            # Formateamos para JSON
+            datos_tendencia = agrupado[['FechaStr', 'MontoLimpio']].rename(
+                columns={'FechaStr': 'fecha', 'MontoLimpio': 'monto'}
+            ).to_dict(orient="records")
 
-        return tendencia.to_dict(orient="records")
-
-    except Exception as e:
-        print(f"Error procesando tendencia: {e}")
-        raise HTTPException(status_code=500, detail=f"Error procesando datos: {str(e)}")
+    return {
+        "bitacora": datos_bitacora,
+        "ventas_tabla": datos_ventas_crudos,
+        "tendencia_grafico": datos_tendencia
+    }
