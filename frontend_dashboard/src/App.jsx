@@ -9,7 +9,7 @@ function App() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
-  // URL FIJA DE RENDER (El Backend que acabamos de crear)
+  // URL FIJA DE RENDER (Sin el guion extra)
   const API_URL = "https://pruebamincyt.onrender.com";
 
   useEffect(() => {
@@ -42,7 +42,10 @@ function App() {
       const tipo = row['Tipo'] || 'Otros';
       // Intentamos leer 'Duración (hs)' o 'Duracion', si falla es 1 hora por defecto
       const horas = parseFloat(row['Duración (hs)'] || row['Duracion']) || 0;
-      conteo[tipo] = (conteo[tipo] || 0) +Hs;
+      
+      // --- CORRECCIÓN AQUÍ ---
+      // Antes decía: +Hs (Error) -> Ahora dice: +horas (Correcto)
+      conteo[tipo] = (conteo[tipo] || 0) + horas;
     });
     return Object.keys(conteo).map(k => ({ name: k, horas: conteo[k] }));
   };
