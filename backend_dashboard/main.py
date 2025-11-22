@@ -17,9 +17,7 @@ app.add_middleware(
 # --- TUS ENLACES ---
 URL_BITACORA = "https://docs.google.com/spreadsheets/d/e/2PACX-1vR0-Uk3fi9iIO1XHja2j3nFlcy4NofCDsjzPh69-4D1jJkDUwq7E5qY1S201_e_0ODIk5WksS_ezYHi/pub?gid=643804140&single=true&output=csv"
 URL_VENTAS = "https://docs.google.com/spreadsheets/d/e/2PACX-1vR0-Uk3fi9iIO1XHja2j3nFlcy4NofCDsjzPh69-4D1jJkDUwq7E5qY1S201_e_0ODIk5WksS_ezYHi/pub?gid=0&single=true&output=csv"
-
-# 👇 ¡AQUÍ ESTÁ TU NUEVO LINK INTEGRADO! 👇
-URL_NUEVA = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQiN48tufdUP4BDXv7cVrh80OI8Li2KqjXQ-4LalIFCJ9ZnMYHr3R4PvSrPDUsk_g/pub?gid=563858184&single=true&output=csv"
+URL_NUEVA = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQiN48tufdUP4BDXv7cVrh80OI8Li2KqjXQ-4LalIFCJ9ZnMYHr3R4PvSrPDUsk_g/pub?output=csv"
 
 # --- HERRAMIENTAS ---
 def limpiar_dinero(valor):
@@ -36,7 +34,12 @@ def cargar_csv(url):
         
         response = requests.get(url)
         response.raise_for_status()
-        df = pd.read_csv(io.StringIO(response.text))
+        
+        # --- CORRECCIÓN DE CARACTERES ---
+        # Forzamos la decodificación a UTF-8 al leer el contenido
+        # response.content es bytes, io.BytesIO lo maneja mejor que StringIO para pandas con encoding
+        df = pd.read_csv(io.BytesIO(response.content), encoding='utf-8')
+        
         df = df.fillna("")
         return df
     except Exception as e:
@@ -45,7 +48,7 @@ def cargar_csv(url):
 
 @app.get("/")
 def home():
-    return {"status": "online", "mensaje": "Backend V2.1 - Con Tabla Extra"}
+    return {"status": "online", "mensaje": "Backend V2.2 - Fix Tildes"}
 
 @app.get("/api/dashboard")
 def get_dashboard_data():
@@ -73,7 +76,7 @@ def get_dashboard_data():
                 columns={'FechaStr': 'fecha', 'MontoLimpio': 'monto'}
             ).to_dict(orient="records")
 
-    # 3. NUEVA TABLA (Lógica nueva)
+    # 3. Nueva Tabla
     df_nueva = cargar_csv(URL_NUEVA)
     datos_nueva_tabla = df_nueva.to_dict(orient="records") if df_nueva is not None else []
 
@@ -81,6 +84,5 @@ def get_dashboard_data():
         "bitacora": datos_bitacora,
         "ventas_tabla": datos_ventas_crudos,
         "tendencia_grafico": datos_tendencia,
-        "extra_tabla": datos_nueva_tabla # <--- Enviamos los datos nuevos
-        # Forzando actualizacion de Render
+        "extra_tabla": datos_nueva_tabla
     }
