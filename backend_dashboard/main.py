@@ -17,21 +17,33 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- CONFIGURACIÓN DE LA IA ---
+# --- CONFIGURACIÓN DE LA IA CON LOGS ---
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 model = None
 
+print("--- INICIANDO CONFIGURACIÓN IA ---")
 if GEMINI_API_KEY:
+    # Ocultamos la clave en los logs por seguridad, solo mostramos los primeros 4 caracteres
+    print(f"✅ API Key encontrada: {GEMINI_API_KEY[:4]}...")
     genai.configure(api_key=GEMINI_API_KEY)
+    
     try:
-        # Usamos 'gemini-pro' directamente, es el más estable.
+        # Intentamos listar modelos para ver qué tenemos disponible
+        print("🔍 Listando modelos disponibles para esta API Key...")
+        for m in genai.list_models():
+            if 'generateContent' in m.supported_generation_methods:
+                print(f"   - {m.name}")
+        
+        # Intentamos cargar gemini-pro directamente
+        print("👉 Intentando cargar modelo: gemini-pro")
         model = genai.GenerativeModel('gemini-pro')
-        print("✅ Modelo IA configurado: gemini-pro")
+        print("✅ Modelo IA configurado EXITOSAMENTE: gemini-pro")
+        
     except Exception as e:
-        print(f"❌ Error crítico configurando IA: {e}")
+        print(f"❌ Error CRÍTICO configurando IA: {e}")
         model = None
 else:
-    print("⚠️ ADVERTENCIA: No se encontró la GEMINI_API_KEY en las variables de entorno")
+    print("⚠️ ERROR FATAL: No se encontró la variable de entorno GEMINI_API_KEY")
 
 # --- TUS ENLACES ---
 URL_BITACORA = "https://docs.google.com/spreadsheets/d/e/2PACX-1vR0-Uk3fi9iIO1XHja2j3nFlcy4NofCDsjzPh69-4D1jJkDUwq7E5qY1S201_e_0ODIk5WksS_ezYHi/pub?gid=643804140&single=true&output=csv"
@@ -64,7 +76,7 @@ class ChatMessage(BaseModel):
 
 @app.get("/")
 def home():
-    return {"status": "online", "mensaje": "Backend V4.3 - Stable Gemini Pro"}
+    return {"status": "online", "mensaje": "Backend V4.4 - Debug Mode"}
 
 @app.get("/api/dashboard")
 def get_dashboard_data():
@@ -111,10 +123,10 @@ def get_dashboard_data():
 @app.post("/api/chat")
 def chat_con_datos(mensaje: ChatMessage):
     if not GEMINI_API_KEY:
-        return {"respuesta": "⚠️ Error: API Key no configurada en Render."}
+        return {"respuesta": "⚠️ Error: API Key no configurada en Render (Variable de Entorno vacía)."}
     
     if not model:
-        return {"respuesta": "❌ Error: El modelo de IA no pudo cargarse. Verifica los logs del servidor."}
+        return {"respuesta": "❌ Error: El modelo de IA no se cargó al inicio. Revisa los logs del servidor para ver el error detallado."}
 
     # Recopilar datos frescos
     df_ventas = cargar_csv(URL_VENTAS)
@@ -125,7 +137,6 @@ def chat_con_datos(mensaje: ChatMessage):
     contexto += "Responde preguntas basándote ÚNICAMENTE en los siguientes datos:\n\n"
     
     if df_ventas is not None:
-        # Limitamos filas para no saturar el contexto si es muy grande
         contexto += f"--- VENTAS (Resumen) ---\n{df_ventas.head(50).to_csv(index=False)}\n\n"
     if df_bitacora is not None:
         contexto += f"--- BITÁCORA (Resumen) ---\n{df_bitacora.head(50).to_csv(index=False)}\n\n"
