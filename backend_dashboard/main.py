@@ -17,33 +17,52 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- CONFIGURACIÓN DE LA IA CON LOGS ---
+# --- CONFIGURACIÓN DE LA IA ---
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 model = None
 
-print("--- INICIANDO CONFIGURACIÓN IA ---")
 if GEMINI_API_KEY:
-    # Ocultamos la clave en los logs por seguridad, solo mostramos los primeros 4 caracteres
-    print(f"✅ API Key encontrada: {GEMINI_API_KEY[:4]}...")
     genai.configure(api_key=GEMINI_API_KEY)
-    
     try:
-        # Intentamos listar modelos para ver qué tenemos disponible
-        print("🔍 Listando modelos disponibles para esta API Key...")
+        # 1. PREGUNTAMOS QUÉ MODELOS HAY DISPONIBLES
+        print("🔍 Buscando modelos disponibles...")
+        available_models = []
         for m in genai.list_models():
             if 'generateContent' in m.supported_generation_methods:
-                print(f"   - {m.name}")
+                available_models.append(m.name)
         
-        # Intentamos cargar gemini-pro directamente
-        print("👉 Intentando cargar modelo: gemini-pro")
-        model = genai.GenerativeModel('gemini-pro')
-        print("✅ Modelo IA configurado EXITOSAMENTE: gemini-pro")
+        print(f"📋 Modelos encontrados: {available_models}")
+
+        # 2. ELEGIMOS EL MEJOR (Prioridad: Pro > Flash > Cualquiera)
+        model_name = None
+        # Buscamos 'gemini-pro' exacto o variantes
+        for m in available_models:
+            if 'gemini-pro' in m and 'vision' not in m:
+                model_name = m
+                break
         
+        # Si no hay Pro, buscamos Flash
+        if not model_name:
+            for m in available_models:
+                if 'flash' in m:
+                    model_name = m
+                    break
+        
+        # Si no, el primero que haya
+        if not model_name and available_models:
+            model_name = available_models[0]
+
+        if model_name:
+            print(f"✅ Seleccionado modelo: {model_name}")
+            model = genai.GenerativeModel(model_name)
+        else:
+            print("❌ No se encontraron modelos compatibles para generar texto.")
+
     except Exception as e:
-        print(f"❌ Error CRÍTICO configurando IA: {e}")
+        print(f"❌ Error crítico configurando IA: {e}")
         model = None
 else:
-    print("⚠️ ERROR FATAL: No se encontró la variable de entorno GEMINI_API_KEY")
+    print("⚠️ ADVERTENCIA: No se encontró la GEMINI_API_KEY")
 
 # --- TUS ENLACES ---
 URL_BITACORA = "https://docs.google.com/spreadsheets/d/e/2PACX-1vR0-Uk3fi9iIO1XHja2j3nFlcy4NofCDsjzPh69-4D1jJkDUwq7E5qY1S201_e_0ODIk5WksS_ezYHi/pub?gid=643804140&single=true&output=csv"
@@ -76,7 +95,7 @@ class ChatMessage(BaseModel):
 
 @app.get("/")
 def home():
-    return {"status": "online", "mensaje": "Backend V4.4 - Debug Mode"}
+    return {"status": "online", "mensaje": "Backend V4.5 - Auto Model Selection"}
 
 @app.get("/api/dashboard")
 def get_dashboard_data():
@@ -123,12 +142,12 @@ def get_dashboard_data():
 @app.post("/api/chat")
 def chat_con_datos(mensaje: ChatMessage):
     if not GEMINI_API_KEY:
-        return {"respuesta": "⚠️ Error: API Key no configurada en Render (Variable de Entorno vacía)."}
+        return {"respuesta": "⚠️ Error: API Key no configurada en Render."}
     
     if not model:
-        return {"respuesta": "❌ Error: El modelo de IA no se cargó al inicio. Revisa los logs del servidor para ver el error detallado."}
+        # Mensaje de error detallado para el usuario final (tú)
+        return {"respuesta": "❌ Error: No se encontró ningún modelo de IA disponible para esta API Key. Revisa los logs de Render."}
 
-    # Recopilar datos frescos
     df_ventas = cargar_csv(URL_VENTAS)
     df_bitacora = cargar_csv(URL_BITACORA)
     df_extra = cargar_csv(URL_NUEVA)
@@ -141,7 +160,7 @@ def chat_con_datos(mensaje: ChatMessage):
     if df_bitacora is not None:
         contexto += f"--- BITÁCORA (Resumen) ---\n{df_bitacora.head(50).to_csv(index=False)}\n\n"
     if df_extra is not None:
-        contexto += f"--- DATOS EXTRA (Resumen) ---\n{df_extra.head(50).to_csv(index=False)}\n\n"
+        contexto += f"--- EXTRA (Resumen) ---\n{df_extra.head(50).to_csv(index=False)}\n\n"
         
     contexto += f"USUARIO: {mensaje.pregunta}\n"
     contexto += "ASISTENTE:"
