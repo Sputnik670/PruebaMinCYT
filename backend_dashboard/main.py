@@ -5,8 +5,8 @@ from pydantic import BaseModel
 import io
 import requests
 import google.generativeai as genai
-from google.generativeai.types import HarmCategory, HarmBlockThreshold
 import os
+import pypdf # <--- Nueva librería para leer PDFs
 
 app = FastAPI()
 
@@ -23,65 +23,30 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 model = None
 
 def configurar_modelo():
-    """
-    Intenta configurar el mejor modelo posible con capacidad de búsqueda (Tools).
-    """
     if not GEMINI_API_KEY:
         print("⚠️ ADVERTENCIA: No se encontró la variable GEMINI_API_KEY")
         return None
 
     genai.configure(api_key=GEMINI_API_KEY)
-    
-    # Configuración de seguridad estándar
-    safety_settings = {
-        HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_ONLY_HIGH,
-        HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_ONLY_HIGH,
-        HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_ONLY_HIGH,
-        HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_ONLY_HIGH,
-    }
-
     try:
-        print("🔍 Buscando modelos compatibles con herramientas...")
-        # Buscamos modelos que soporten 'generateContent'
-        available = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-        print(f"📋 Modelos disponibles: {available}")
-
-        # Prioridad 1: Gemini 1.5 Flash (Rápido y soporta Tools)
-        target_model = next((m for m in available if 'gemini-1.5-flash' in m), None)
+        # Buscamos el mejor modelo disponible (Pro > Flash)
+        available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
         
-        # Prioridad 2: Gemini 1.5 Pro
+        # Prioridad: Gemini Pro
+        target_model = next((m for m in available_models if 'gemini-pro' in m and 'vision' not in m), None)
         if not target_model:
-            target_model = next((m for m in available if 'gemini-1.5-pro' in m), None)
-            
-        # Prioridad 3: Gemini Pro (Clásico)
-        if not target_model:
-            target_model = 'models/gemini-pro'
+            target_model = next((m for m in available_models if 'flash' in m), available_models[0] if available_models else None)
 
-        print(f"🚀 Intentando cargar: {target_model}")
-        
-        # Intentamos cargar CON herramientas de búsqueda
-        try:
-            # Esta es la línea mágica para 'Deep Research' (Grounding)
-            tools_config = [
-                {"google_search": {}} # Habilita la búsqueda en Google
-            ]
-            m = genai.GenerativeModel(target_model, tools=tools_config, safety_settings=safety_settings)
-            # Prueba de fuego (dummy)
-            m.generate_content("test") 
-            print(f"✅ Modelo {target_model} cargado CON Búsqueda Web activa.")
-            return m
-        except Exception as e_tools:
-            print(f"⚠️ No se pudo activar Búsqueda Web en {target_model}: {e_tools}")
-            print("🔄 Reintentando en modo estándar (Solo datos internos)...")
-            # Fallback: Cargar sin herramientas
-            m = genai.GenerativeModel(target_model, safety_settings=safety_settings)
-            return m
-
+        if target_model:
+            print(f"✅ Modelo IA seleccionado: {target_model}")
+            return genai.GenerativeModel(target_model)
+        else:
+            print("❌ No se encontraron modelos compatibles.")
+            return None
     except Exception as e:
         print(f"❌ Error crítico configurando IA: {e}")
         return None
 
-# Inicializamos el modelo al arrancar
 model = configurar_modelo()
 
 # --- TUS ENLACES ---
@@ -89,6 +54,10 @@ URL_BITACORA = "https://docs.google.com/spreadsheets/d/e/2PACX-1vR0-Uk3fi9iIO1XH
 URL_VENTAS = "https://docs.google.com/spreadsheets/d/e/2PACX-1vR0-Uk3fi9iIO1XHja2j3nFlcy4NofCDsjzPh69-4D1jJkDUwq7E5qY1S201_e_0ODIk5WksS_ezYHi/pub?gid=0&single=true&output=csv"
 URL_NUEVA = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQiN48tufdUP4BDXv7cVrh80OI8Li2KqjXQ-4LalIFCJ9ZnMYHr3R4PvSrPDUsk_g/pub?output=csv"
 URL_CALENDARIO = "TU_LINK_CALENDARIO_AQUI" 
+
+# 👇 ¡NUEVO: PEGA AQUÍ EL LINK DIRECTO DE TU PDF! 👇
+# Nota: Si es Google Drive, asegúrate de usar un link de descarga directa, no de vista previa.
+URL_DOCUMENTO_PDF = "TU_LINK_PDF_AQUI" 
 
 # --- HERRAMIENTAS ---
 def limpiar_dinero(valor):
@@ -107,23 +76,44 @@ def cargar_csv(url):
         df = df.fillna("")
         return df
     except Exception as e:
-        print(f"Error cargando CSV {url}: {e}")
+        print(f"Error CSV {url}: {e}")
         return None
+
+# --- NUEVA FUNCIÓN PARA LEER PDF ---
+def cargar_pdf_texto(url):
+    try:
+        if "TU_LINK" in url or not url: return ""
+        print(f"📥 Descargando PDF desde: {url}")
+        response = requests.get(url)
+        response.raise_for_status()
+        
+        # Leemos el PDF desde la memoria
+        pdf_file = io.BytesIO(response.content)
+        reader = pypdf.PdfReader(pdf_file)
+        
+        texto_completo = ""
+        for i, page in enumerate(reader.pages):
+            texto_completo += f"--- Página {i+1} ---\n{page.extract_text()}\n"
+            
+        print(f"✅ PDF procesado exitosamente ({len(reader.pages)} páginas)")
+        return texto_completo
+    except Exception as e:
+        print(f"⚠️ Error leyendo PDF: {e}")
+        return ""
 
 class ChatMessage(BaseModel):
     pregunta: str
 
 @app.get("/")
 def home():
-    return {"status": "online", "mensaje": "Backend V5.0 - IA Híbrida (Datos + Web)"}
+    return {"status": "online", "mensaje": "Backend V6.0 - Lector de Documentos PDF Activo"}
 
 @app.get("/api/dashboard")
 def get_dashboard_data():
-    # 1. Bitácora
+    # (Lógica de Dashboard igual que antes para no romper el frontend)
     df_bitacora = cargar_csv(URL_BITACORA)
     datos_bitacora = df_bitacora.to_dict(orient="records") if df_bitacora is not None else []
 
-    # 2. Ventas
     df_ventas = cargar_csv(URL_VENTAS)
     datos_tendencia = []
     datos_ventas_crudos = []
@@ -143,11 +133,9 @@ def get_dashboard_data():
                 columns={'FechaStr': 'fecha', 'MontoLimpio': 'monto'}
             ).to_dict(orient="records")
 
-    # 3. Nueva Tabla
     df_nueva = cargar_csv(URL_NUEVA)
     datos_nueva_tabla = df_nueva.to_dict(orient="records") if df_nueva is not None else []
-
-    # 4. Calendario
+    
     df_cal = cargar_csv(URL_CALENDARIO)
     datos_calendario = df_cal.to_dict(orient="records") if df_cal is not None else []
 
@@ -162,33 +150,40 @@ def get_dashboard_data():
 @app.post("/api/chat")
 def chat_con_datos(mensaje: ChatMessage):
     global model
-    # Reintentar carga si falló al inicio
     if not model:
         model = configurar_modelo()
         if not model:
-            return {"respuesta": "❌ Error: No se pudo iniciar el motor de IA."}
+            return {"respuesta": "❌ Error: IA no disponible. Verifica API Key en Render."}
 
+    # 1. Cargar Datos Numéricos
     df_ventas = cargar_csv(URL_VENTAS)
     df_bitacora = cargar_csv(URL_BITACORA)
     df_extra = cargar_csv(URL_NUEVA)
     
-    contexto = "Eres un analista experto del MinCYT. Tienes acceso a dos fuentes de información:\n"
-    contexto += "1. DATOS INTERNOS (Prioritarios): Los CSV adjuntos abajo.\n"
-    contexto += "2. BÚSQUEDA WEB: Puedes buscar en Google si la pregunta requiere contexto externo (ej: tipo de cambio, noticias relacionadas).\n\n"
-    contexto += "DATOS DEL DASHBOARD:\n"
+    # 2. Cargar Documento PDF (¡NUEVO!)
+    texto_pdf = cargar_pdf_texto(URL_DOCUMENTO_PDF)
+    
+    # 3. Armar el "Cerebro" del Contexto
+    contexto = "Eres un analista experto del MinCYT. Tienes acceso a datos numéricos y documentación oficial.\n"
+    contexto += "Responde basándote en la siguiente información:\n\n"
     
     if df_ventas is not None:
-        contexto += f"--- VENTAS (Resumen) ---\n{df_ventas.head(50).to_csv(index=False)}\n\n"
-    if df_bitacora is not None:
-        contexto += f"--- BITÁCORA (Resumen) ---\n{df_bitacora.head(50).to_csv(index=False)}\n\n"
+        contexto += f"--- DATOS: VENTAS (Resumen) ---\n{df_ventas.head(50).to_csv(index=False)}\n\n"
     if df_extra is not None:
-        contexto += f"--- CALENDARIO/EXTRA (Resumen) ---\n{df_extra.head(50).to_csv(index=False)}\n\n"
+        contexto += f"--- DATOS: CALENDARIO/EXTRA ---\n{df_extra.head(50).to_csv(index=False)}\n\n"
         
-    contexto += f"PREGUNTA USUARIO: {mensaje.pregunta}\n"
+    if texto_pdf:
+        # Limitamos el texto del PDF a ~30.000 caracteres para no saturar, si es muy largo.
+        # Gemini Pro aguanta mucho, pero por seguridad y velocidad.
+        contexto += f"--- DOCUMENTACIÓN ADJUNTA (PDF) ---\n{texto_pdf[:30000]}\n...\n(Fin del extracto)\n\n"
+    else:
+        contexto += "--- DOCUMENTACIÓN (PDF) ---\nNo se pudo cargar o no hay documento asignado.\n\n"
+        
+    contexto += f"PREGUNTA DEL USUARIO: {mensaje.pregunta}\n"
     contexto += "RESPUESTA:"
 
     try:
         response = model.generate_content(contexto)
         return {"respuesta": response.text}
     except Exception as e:
-        return {"respuesta": f"Error en el procesamiento: {str(e)}"}
+        return {"respuesta": f"Error procesando respuesta: {str(e)}"}
