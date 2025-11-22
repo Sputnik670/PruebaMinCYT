@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import io
 import requests
 import google.generativeai as genai
+from google.generativeai.types import HarmCategory, HarmBlockThreshold
 import os
 import pypdf
 
@@ -27,35 +28,46 @@ def configurar_modelo():
         return None
 
     genai.configure(api_key=GEMINI_API_KEY)
-    try:
-        available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-        print(f"📋 Modelos disponibles: {available_models}")
-        
-        # Prioridad: Flash > Pro
-        target_model = next((m for m in available_models if 'gemini-1.5-flash' in m), None)
-        if not target_model:
-            target_model = next((m for m in available_models if 'gemini-pro' in m and 'vision' not in m), None)
-        if not target_model and available_models:
-            target_model = available_models[0]
+    
+    # Configuración de seguridad estándar
+    safety_settings = {
+        HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_ONLY_HIGH,
+        HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_ONLY_HIGH,
+        HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_ONLY_HIGH,
+        HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_ONLY_HIGH,
+    }
 
-        if target_model:
-            print(f"✅ Modelo IA seleccionado: {target_model}")
-            
-            # --- AQUÍ REACTIVAMOS LA BÚSQUEDA WEB ---
+    try:
+        print("🔍 Buscando modelos compatibles con herramientas...")
+        available = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+        print(f"📋 Modelos disponibles: {available}")
+
+        # Prioridad: Gemini 1.5 Flash (Suele tener mejor soporte de herramientas gratuito)
+        target_model = next((m for m in available if 'gemini-1.5-flash' in m), None)
+        
+        if not target_model:
+             target_model = next((m for m in available if 'gemini-1.5-pro' in m), None)
+
+        if not target_model:
+            target_model = 'models/gemini-pro'
+
+        print(f"🚀 Intentando cargar: {target_model}")
+        
+        try:
+            # Habilitamos explícitamente la búsqueda
             tools_config = [
                 {"google_search": {}} 
             ]
-            
-            # Intentamos cargar con herramientas
-            try:
-                return genai.GenerativeModel(target_model, tools=tools_config)
-            except Exception as e:
-                print(f"⚠️ No se pudo activar Search en {target_model}, usando modo estándar. Error: {e}")
-                return genai.GenerativeModel(target_model)
-        else:
-            return None
+            m = genai.GenerativeModel(target_model, tools=tools_config, safety_settings=safety_settings)
+            return m
+        except Exception as e_tools:
+            print(f"⚠️ No se pudo activar Búsqueda Web en {target_model}: {e_tools}")
+            # Fallback sin herramientas si falla la configuración de búsqueda
+            m = genai.GenerativeModel(target_model, safety_settings=safety_settings)
+            return m
+
     except Exception as e:
-        print(f"❌ Error IA: {e}")
+        print(f"❌ Error crítico configurando IA: {e}")
         return None
 
 model = configurar_modelo()
@@ -87,11 +99,11 @@ def cargar_csv(url):
 
 @app.get("/")
 def home():
-    return {"status": "online", "mensaje": "Backend V8.0 - IA Total (Datos + PDF + Search)"}
+    return {"status": "online", "mensaje": "Backend V8.1 - IA Híbrida Reforzada"}
 
 @app.get("/api/dashboard")
 def get_dashboard_data():
-    # (Lógica Dashboard igual...)
+    # (Lógica sin cambios)
     df_bitacora = cargar_csv(URL_BITACORA)
     datos_bitacora = df_bitacora.to_dict(orient="records") if df_bitacora is not None else []
 
@@ -128,7 +140,6 @@ def get_dashboard_data():
         "calendario": datos_calendario
     }
 
-# --- CHAT CON SOPORTE DE ARCHIVOS Y BÚSQUEDA ---
 @app.post("/api/chat")
 async def chat_con_datos(
     pregunta: str = Form(...), 
@@ -140,12 +151,11 @@ async def chat_con_datos(
         if not model:
             return {"respuesta": "❌ Error: IA no disponible."}
 
-    # 1. Cargar CSVs internos
+    # 1. Cargar Datos
     df_ventas = cargar_csv(URL_VENTAS)
     df_bitacora = cargar_csv(URL_BITACORA)
     df_extra = cargar_csv(URL_NUEVA)
     
-    # 2. Procesar Archivo Subido (Si existe)
     texto_pdf_usuario = ""
     nombre_archivo = ""
     if file:
@@ -157,15 +167,16 @@ async def chat_con_datos(
             for i, page in enumerate(reader.pages):
                 texto_pdf_usuario += f"[Página {i+1}] {page.extract_text()}\n"
         except Exception as e:
-            texto_pdf_usuario = f"Error al leer el archivo adjunto: {str(e)}"
+            texto_pdf_usuario = f"Error al leer archivo: {str(e)}"
 
-    # 3. Contexto Híbrido (Datos + Web + PDF)
-    contexto = "Eres un analista experto del MinCYT. Tienes tres fuentes de información:\n"
-    contexto += "1. DATOS INTERNOS: Los CSV del dashboard.\n"
-    contexto += "2. DOCUMENTOS: PDFs adjuntos por el usuario.\n"
-    contexto += "3. BÚSQUEDA WEB: Tienes habilitada la búsqueda en Google. Úsala libremente para buscar datos externos (ej: cotización bitcoin, noticias, leyes) si la pregunta lo requiere.\n\n"
+    # 2. Prompt Mejorado
+    contexto = """Eres un asistente inteligente del MinCYT. Tienes dos capacidades principales:
+1.  **Analista de Datos Internos:** Usas los CSV adjuntos para responder sobre gestión, ventas y calendario.
+2.  **Investigador Web:** Tienes acceso a Google Search. SI LA PREGUNTA ES SOBRE ACTUALIDAD, DATOS EXTERNOS O NO ESTÁ EN LOS CSV, DEBES USAR LA BÚSQUEDA DE GOOGLE para responder con precisión y datos actualizados.
+
+DATOS INTERNOS DISPONIBLES:
+"""
     
-    contexto += "DATOS DEL DASHBOARD:\n"
     if df_ventas is not None:
         contexto += f"--- VENTAS (Resumen) ---\n{df_ventas.head(50).to_csv(index=False)}\n\n"
     if df_extra is not None:
@@ -174,7 +185,8 @@ async def chat_con_datos(
     if texto_pdf_usuario:
         contexto += f"--- ARCHIVO ADJUNTO ({nombre_archivo}) ---\n{texto_pdf_usuario[:50000]}\n\n"
         
-    contexto += f"PREGUNTA: {pregunta}\nRESPUESTA:"
+    contexto += f"PREGUNTA DEL USUARIO: {pregunta}\n"
+    contexto += "Si la respuesta requiere datos externos (ej: cotización del dólar, noticias, clima, bitcoin), USA TU HERRAMIENTA DE BÚSQUEDA."
 
     try:
         response = model.generate_content(contexto)
