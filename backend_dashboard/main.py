@@ -5,6 +5,7 @@ from pydantic import BaseModel
 import io
 import requests
 import google.generativeai as genai
+from google.generativeai.types import HarmCategory, HarmBlockThreshold
 import os
 
 app = FastAPI()
@@ -21,48 +22,67 @@ app.add_middleware(
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 model = None
 
-if GEMINI_API_KEY:
+def configurar_modelo():
+    """
+    Intenta configurar el mejor modelo posible con capacidad de búsqueda (Tools).
+    """
+    if not GEMINI_API_KEY:
+        print("⚠️ ADVERTENCIA: No se encontró la variable GEMINI_API_KEY")
+        return None
+
     genai.configure(api_key=GEMINI_API_KEY)
+    
+    # Configuración de seguridad estándar
+    safety_settings = {
+        HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_ONLY_HIGH,
+        HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_ONLY_HIGH,
+        HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_ONLY_HIGH,
+        HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_ONLY_HIGH,
+    }
+
     try:
-        # 1. PREGUNTAMOS QUÉ MODELOS HAY DISPONIBLES
-        print("🔍 Buscando modelos disponibles...")
-        available_models = []
-        for m in genai.list_models():
-            if 'generateContent' in m.supported_generation_methods:
-                available_models.append(m.name)
-        
-        print(f"📋 Modelos encontrados: {available_models}")
+        print("🔍 Buscando modelos compatibles con herramientas...")
+        # Buscamos modelos que soporten 'generateContent'
+        available = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+        print(f"📋 Modelos disponibles: {available}")
 
-        # 2. ELEGIMOS EL MEJOR (Prioridad: Pro > Flash > Cualquiera)
-        model_name = None
-        # Buscamos 'gemini-pro' exacto o variantes
-        for m in available_models:
-            if 'gemini-pro' in m and 'vision' not in m:
-                model_name = m
-                break
+        # Prioridad 1: Gemini 1.5 Flash (Rápido y soporta Tools)
+        target_model = next((m for m in available if 'gemini-1.5-flash' in m), None)
         
-        # Si no hay Pro, buscamos Flash
-        if not model_name:
-            for m in available_models:
-                if 'flash' in m:
-                    model_name = m
-                    break
-        
-        # Si no, el primero que haya
-        if not model_name and available_models:
-            model_name = available_models[0]
+        # Prioridad 2: Gemini 1.5 Pro
+        if not target_model:
+            target_model = next((m for m in available if 'gemini-1.5-pro' in m), None)
+            
+        # Prioridad 3: Gemini Pro (Clásico)
+        if not target_model:
+            target_model = 'models/gemini-pro'
 
-        if model_name:
-            print(f"✅ Seleccionado modelo: {model_name}")
-            model = genai.GenerativeModel(model_name)
-        else:
-            print("❌ No se encontraron modelos compatibles para generar texto.")
+        print(f"🚀 Intentando cargar: {target_model}")
+        
+        # Intentamos cargar CON herramientas de búsqueda
+        try:
+            # Esta es la línea mágica para 'Deep Research' (Grounding)
+            tools_config = [
+                {"google_search": {}} # Habilita la búsqueda en Google
+            ]
+            m = genai.GenerativeModel(target_model, tools=tools_config, safety_settings=safety_settings)
+            # Prueba de fuego (dummy)
+            m.generate_content("test") 
+            print(f"✅ Modelo {target_model} cargado CON Búsqueda Web activa.")
+            return m
+        except Exception as e_tools:
+            print(f"⚠️ No se pudo activar Búsqueda Web en {target_model}: {e_tools}")
+            print("🔄 Reintentando en modo estándar (Solo datos internos)...")
+            # Fallback: Cargar sin herramientas
+            m = genai.GenerativeModel(target_model, safety_settings=safety_settings)
+            return m
 
     except Exception as e:
         print(f"❌ Error crítico configurando IA: {e}")
-        model = None
-else:
-    print("⚠️ ADVERTENCIA: No se encontró la GEMINI_API_KEY")
+        return None
+
+# Inicializamos el modelo al arrancar
+model = configurar_modelo()
 
 # --- TUS ENLACES ---
 URL_BITACORA = "https://docs.google.com/spreadsheets/d/e/2PACX-1vR0-Uk3fi9iIO1XHja2j3nFlcy4NofCDsjzPh69-4D1jJkDUwq7E5qY1S201_e_0ODIk5WksS_ezYHi/pub?gid=643804140&single=true&output=csv"
@@ -95,7 +115,7 @@ class ChatMessage(BaseModel):
 
 @app.get("/")
 def home():
-    return {"status": "online", "mensaje": "Backend V4.5 - Auto Model Selection"}
+    return {"status": "online", "mensaje": "Backend V5.0 - IA Híbrida (Datos + Web)"}
 
 @app.get("/api/dashboard")
 def get_dashboard_data():
@@ -141,32 +161,34 @@ def get_dashboard_data():
 
 @app.post("/api/chat")
 def chat_con_datos(mensaje: ChatMessage):
-    if not GEMINI_API_KEY:
-        return {"respuesta": "⚠️ Error: API Key no configurada en Render."}
-    
+    global model
+    # Reintentar carga si falló al inicio
     if not model:
-        # Mensaje de error detallado para el usuario final (tú)
-        return {"respuesta": "❌ Error: No se encontró ningún modelo de IA disponible para esta API Key. Revisa los logs de Render."}
+        model = configurar_modelo()
+        if not model:
+            return {"respuesta": "❌ Error: No se pudo iniciar el motor de IA."}
 
     df_ventas = cargar_csv(URL_VENTAS)
     df_bitacora = cargar_csv(URL_BITACORA)
     df_extra = cargar_csv(URL_NUEVA)
     
-    contexto = "Eres un asistente experto en análisis de datos para el Dashboard MinCYT.\n"
-    contexto += "Responde preguntas basándote ÚNICAMENTE en los siguientes datos:\n\n"
+    contexto = "Eres un analista experto del MinCYT. Tienes acceso a dos fuentes de información:\n"
+    contexto += "1. DATOS INTERNOS (Prioritarios): Los CSV adjuntos abajo.\n"
+    contexto += "2. BÚSQUEDA WEB: Puedes buscar en Google si la pregunta requiere contexto externo (ej: tipo de cambio, noticias relacionadas).\n\n"
+    contexto += "DATOS DEL DASHBOARD:\n"
     
     if df_ventas is not None:
         contexto += f"--- VENTAS (Resumen) ---\n{df_ventas.head(50).to_csv(index=False)}\n\n"
     if df_bitacora is not None:
         contexto += f"--- BITÁCORA (Resumen) ---\n{df_bitacora.head(50).to_csv(index=False)}\n\n"
     if df_extra is not None:
-        contexto += f"--- EXTRA (Resumen) ---\n{df_extra.head(50).to_csv(index=False)}\n\n"
+        contexto += f"--- CALENDARIO/EXTRA (Resumen) ---\n{df_extra.head(50).to_csv(index=False)}\n\n"
         
-    contexto += f"USUARIO: {mensaje.pregunta}\n"
-    contexto += "ASISTENTE:"
+    contexto += f"PREGUNTA USUARIO: {mensaje.pregunta}\n"
+    contexto += "RESPUESTA:"
 
     try:
         response = model.generate_content(contexto)
         return {"respuesta": response.text}
     except Exception as e:
-        return {"respuesta": f"Hubo un error al generar la respuesta: {str(e)}"}
+        return {"respuesta": f"Error en el procesamiento: {str(e)}"}
