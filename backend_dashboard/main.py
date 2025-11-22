@@ -19,25 +19,17 @@ app.add_middleware(
 
 # --- CONFIGURACIÓN DE LA IA ---
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
-
-# Variable global para el modelo
 model = None
 
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
     try:
-        # Intentamos usar 'gemini-1.5-flash' primero
-        model = genai.GenerativeModel('gemini-1.5-flash')
-        print("✅ Modelo IA configurado: gemini-1.5-flash")
+        # Usamos 'gemini-pro' directamente, es el más estable.
+        model = genai.GenerativeModel('gemini-pro')
+        print("✅ Modelo IA configurado: gemini-pro")
     except Exception as e:
-        print(f"⚠️ Error al configurar gemini-1.5-flash: {e}")
-        # Si falla, intentamos con 'gemini-pro' como fallback seguro
-        try:
-            model = genai.GenerativeModel('gemini-pro')
-            print("✅ Fallback: Modelo IA configurado como gemini-pro")
-        except Exception as e2:
-            print(f"❌ Error crítico configurando IA: {e2}")
-            model = None
+        print(f"❌ Error crítico configurando IA: {e}")
+        model = None
 else:
     print("⚠️ ADVERTENCIA: No se encontró la GEMINI_API_KEY en las variables de entorno")
 
@@ -72,7 +64,7 @@ class ChatMessage(BaseModel):
 
 @app.get("/")
 def home():
-    return {"status": "online", "mensaje": "Backend V4.2 - Fix IA Models"}
+    return {"status": "online", "mensaje": "Backend V4.3 - Stable Gemini Pro"}
 
 @app.get("/api/dashboard")
 def get_dashboard_data():
@@ -118,36 +110,27 @@ def get_dashboard_data():
 
 @app.post("/api/chat")
 def chat_con_datos(mensaje: ChatMessage):
-    # Verificación robusta de la API Key y el Modelo
     if not GEMINI_API_KEY:
         return {"respuesta": "⚠️ Error: API Key no configurada en Render."}
     
-    # Si el modelo no se inicializó al principio, intentamos una última vez
-    global model
     if not model:
-        try:
-            model = genai.GenerativeModel('gemini-pro') # Intento final con gemini-pro
-        except Exception:
-            # Si todo falla, listamos los modelos disponibles para debug
-            try:
-                modelos = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-                return {"respuesta": f"❌ Error: No se pudo cargar el modelo. Modelos disponibles: {modelos}"}
-            except:
-                return {"respuesta": "❌ Error crítico: La API Key parece inválida o no tiene permisos."}
+        return {"respuesta": "❌ Error: El modelo de IA no pudo cargarse. Verifica los logs del servidor."}
 
+    # Recopilar datos frescos
     df_ventas = cargar_csv(URL_VENTAS)
     df_bitacora = cargar_csv(URL_BITACORA)
     df_extra = cargar_csv(URL_NUEVA)
     
     contexto = "Eres un asistente experto en análisis de datos para el Dashboard MinCYT.\n"
-    contexto += "Responde preguntas basándote en los siguientes datos:\n\n"
+    contexto += "Responde preguntas basándote ÚNICAMENTE en los siguientes datos:\n\n"
     
     if df_ventas is not None:
-        contexto += f"--- VENTAS ---\n{df_ventas.to_csv(index=False)}\n\n"
+        # Limitamos filas para no saturar el contexto si es muy grande
+        contexto += f"--- VENTAS (Resumen) ---\n{df_ventas.head(50).to_csv(index=False)}\n\n"
     if df_bitacora is not None:
-        contexto += f"--- BITÁCORA ---\n{df_bitacora.to_csv(index=False)}\n\n"
+        contexto += f"--- BITÁCORA (Resumen) ---\n{df_bitacora.head(50).to_csv(index=False)}\n\n"
     if df_extra is not None:
-        contexto += f"--- EXTRA ---\n{df_extra.to_csv(index=False)}\n\n"
+        contexto += f"--- DATOS EXTRA (Resumen) ---\n{df_extra.head(50).to_csv(index=False)}\n\n"
         
     contexto += f"USUARIO: {mensaje.pregunta}\n"
     contexto += "ASISTENTE:"
