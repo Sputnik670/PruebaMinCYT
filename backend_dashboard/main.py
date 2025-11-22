@@ -82,4 +82,5 @@ def get_dashboard_data():
         "ventas_tabla": datos_ventas_crudos,
         "tendencia_grafico": datos_tendencia,
         "extra_tabla": datos_nueva_tabla # <--- Enviamos los datos nuevos
+        # Forzando actualizacion de Render
     }
