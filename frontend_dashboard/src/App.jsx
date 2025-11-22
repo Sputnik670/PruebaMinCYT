@@ -67,7 +67,14 @@ function App() {
   );
 
   return (
-    <div style={{ maxWidth: '1200px', margin: '0 auto', padding: '20px', fontFamily: 'Arial, sans-serif' }}>
+  <div style={{ 
+      maxWidth: '1200px', 
+      margin: '0 auto', 
+      padding: '20px', 
+      fontFamily: 'Arial, sans-serif',
+      minHeight: '100vh', 
+      overflowY: 'auto' 
+  }}>
       <header style={{ textAlign: 'center', marginBottom: '50px' }}>
         <h1 style={{ fontSize: '2.5rem' }}>🚀 Dashboard Maestro V2</h1>
         <p style={{ color: '#666' }}>Conexión Directa a Google Sheets</p>
