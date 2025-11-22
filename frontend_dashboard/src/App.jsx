@@ -49,7 +49,7 @@ function App() {
     }}>
       <header style={{ textAlign: 'center', marginBottom: '40px' }}>
         <h1 style={{ fontSize: '2.5rem' }}>🚀 Dashboard Maestro V2</h1>
-        <p style={{ color: '#666' }}>Vista Compacta</p>
+        <p style={{ color: '#666' }}>Gestión y Calendario</p>
       </header>
 
       {/* GRÁFICOS (Siempre visibles) */}
@@ -90,8 +90,8 @@ function App() {
         <TablaGenerica datos={data.ventas_tabla} filasPorPagina={5} />
       </SeccionAcordeon>
 
-      {/* --- ACORDEÓN 2: TABLA NUEVA --- */}
-      <SeccionAcordeon titulo="📂 Datos Adicionales..." defaultAbierto={false}>
+      {/* --- ACORDEÓN 2: CALENDARIO (Antes Datos Extra) --- */}
+      <SeccionAcordeon titulo="📅 Calendario Internacionales" defaultAbierto={true}>
         {data.extra_tabla && data.extra_tabla.length > 0 ? (
           <TablaGenerica datos={data.extra_tabla} filasPorPagina={10} />
         ) : (
@@ -103,53 +103,39 @@ function App() {
   );
 }
 
-// --- COMPONENTE NUEVO: ACORDEÓN ---
+// --- COMPONENTE ACORDEÓN (Reutilizable) ---
 const SeccionAcordeon = ({ titulo, children, defaultAbierto = false }) => {
   const [abierto, setAbierto] = useState(defaultAbierto);
 
   return (
     <div style={{ marginBottom: '20px', borderRadius: '10px', overflow: 'hidden', border: '1px solid #333' }}>
-      {/* Barra de Título (Clickeable) */}
       <button 
         onClick={() => setAbierto(!abierto)}
         style={{
-          width: '100%',
-          background: '#2c3e50',
-          color: 'white',
-          padding: '15px 20px',
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          border: 'none',
-          cursor: 'pointer',
-          fontSize: '1.1rem',
-          fontWeight: 'bold',
-          textAlign: 'left'
+          width: '100%', background: '#2c3e50', color: 'white', padding: '15px 20px',
+          display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+          border: 'none', cursor: 'pointer', fontSize: '1.1rem', fontWeight: 'bold', textAlign: 'left'
         }}
       >
         <span>{titulo}</span>
         <span style={{ transform: abierto ? 'rotate(180deg)' : 'rotate(0deg)', transition: '0.3s' }}>▼</span>
       </button>
-
-      {/* Contenido Desplegable */}
-      {abierto && (
-        <div style={{ padding: '20px', background: '#1a1a1a' }}>
-          {children}
-        </div>
-      )}
+      {abierto && <div style={{ padding: '20px', background: '#1a1a1a' }}>{children}</div>}
     </div>
   );
 };
 
-// Componente Tabla (Igual que antes)
+// --- COMPONENTE TABLA CON PAGINACIÓN ---
 const TablaGenerica = ({ datos, filasPorPagina = 10 }) => {
   const [paginaActual, setPaginaActual] = useState(1);
   if (!datos || datos.length === 0) return <p>Sin datos.</p>;
+  
   const totalPaginas = Math.ceil(datos.length / filasPorPagina);
   const indiceUltimo = paginaActual * filasPorPagina;
   const indicePrimero = indiceUltimo - filasPorPagina;
   const datosVisibles = datos.slice(indicePrimero, indiceUltimo);
   const columnas = Object.keys(datos[0]);
+  
   const cambiarPagina = (nuevaPagina) => {
     if (nuevaPagina >= 1 && nuevaPagina <= totalPaginas) setPaginaActual(nuevaPagina);
   };
