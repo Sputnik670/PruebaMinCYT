@@ -22,12 +22,14 @@ a:hover {
   color: #535bf2;
 }
 
+/* --- AQUÍ ESTABA EL PROBLEMA --- */
 body {
   margin: 0;
-  display: flex;
-  place-items: center;
+  /* Quitamos "display: flex" y "place-items: center" que bloqueaban el scroll */
+  display: block; 
   min-width: 320px;
   min-height: 100vh;
+  overflow-x: hidden; /* Evita scroll horizontal innecesario */
 }
 
 h1 {
