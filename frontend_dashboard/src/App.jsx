@@ -31,7 +31,7 @@ function App() {
       });
   }, []);
 
-  // 2. PROCESAMIENTO DE BITÁCORA (Corrección Hs -> horas)
+  // 2. PROCESAMIENTO DE BITÁCORA
   const prepararBitacora = () => {
     if (!data?.bitacora) return [];
     const conteo = {};
@@ -44,11 +44,10 @@ function App() {
   };
 
   // 3. ESTILOS Y RENDERIZADO
-  if (loading) return <div style={{display:'flex', height:'100vh', alignItems:'center', justifyContent:'center'}}><h2>⏳ Cargando...</h2></div>;
+  if (loading) return <div style={{display:'flex', height:'100vh', alignItems:'center', justifyContent:'center'}}><h2>⏳ Cargando datos...</h2></div>;
   if (error) return <div style={{color:'red', padding:50, textAlign:'center'}}><h1>⚠️ Error</h1><p>{error}</p></div>;
 
   return (
-    // 4. SCROLL HABILITADO (minHeight + overflow)
     <div style={{ 
       maxWidth: '1200px', 
       margin: '0 auto', 
@@ -100,17 +99,18 @@ function App() {
       {/* Tabla Original */}
       <div style={{ marginTop: '50px' }}>
         <h3>📋 Registros de Ventas</h3>
-        <TablaGenerica datos={data.ventas_tabla} />
+        <TablaGenerica datos={data.ventas_tabla} filasPorPagina={5} />
       </div>
 
-      {/* 5. LA NUEVA TABLA QUE FALTABA */}
+      {/* Tabla Nueva (Aquí es donde necesitas navegar) */}
       <div style={{ marginTop: '50px', marginBottom: '100px' }}>
         <h3 style={{ color: '#3498db' }}>📂 Datos Adicionales (Nueva Integración)</h3>
         {data.extra_tabla && data.extra_tabla.length > 0 ? (
-          <TablaGenerica datos={data.extra_tabla} />
+          // Aquí activamos la paginación de 10 en 10
+          <TablaGenerica datos={data.extra_tabla} filasPorPagina={10} />
         ) : (
           <p style={{ color: '#666', fontStyle: 'italic' }}>
-            Esperando datos... (Verifica el link en el backend si esto no cambia)
+            No hay datos disponibles.
           </p>
         )}
       </div>
@@ -119,11 +119,27 @@ function App() {
   );
 }
 
-// Componente para Tablas
-const TablaGenerica = ({ datos }) => {
+// --- COMPONENTE DE TABLA INTELIGENTE CON PAGINACIÓN ---
+const TablaGenerica = ({ datos, filasPorPagina = 10 }) => {
+  // Estado local para saber en qué página estamos
+  const [paginaActual, setPaginaActual] = useState(1);
+
   if (!datos || datos.length === 0) return <p>Sin datos.</p>;
-  // Tomamos las columnas del primer objeto
+
+  // Cálculos matemáticos para cortar la lista
+  const totalPaginas = Math.ceil(datos.length / filasPorPagina);
+  const indiceUltimo = paginaActual * filasPorPagina;
+  const indicePrimero = indiceUltimo - filasPorPagina;
+  const datosVisibles = datos.slice(indicePrimero, indiceUltimo);
+  
   const columnas = Object.keys(datos[0]);
+
+  // Función para cambiar página
+  const cambiarPagina = (nuevaPagina) => {
+    if (nuevaPagina >= 1 && nuevaPagina <= totalPaginas) {
+      setPaginaActual(nuevaPagina);
+    }
+  };
 
   return (
     <div style={{ overflowX: 'auto', background: '#2a2a2a', padding: '20px', borderRadius: '10px' }}>
@@ -136,7 +152,7 @@ const TablaGenerica = ({ datos }) => {
           </tr>
         </thead>
         <tbody>
-          {datos.slice(0, 10).map((row, i) => (
+          {datosVisibles.map((row, i) => (
             <tr key={i} style={{ borderBottom: '1px solid #444' }}>
               {columnas.map((col, j) => (
                 <td key={j} style={{ padding: 10 }}>{row[col]}</td>
@@ -145,7 +161,51 @@ const TablaGenerica = ({ datos }) => {
           ))}
         </tbody>
       </table>
-      {datos.length > 10 && <p style={{marginTop: 10, fontSize: '0.8em'}}>... mostrando 10 de {datos.length} filas.</p>}
+
+      {/* --- CONTROLES DE NAVEGACIÓN --- */}
+      {totalPaginas > 1 && (
+        <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '20px', marginTop: '20px', color: '#ccc' }}>
+          <button 
+            onClick={() => cambiarPagina(paginaActual - 1)} 
+            disabled={paginaActual === 1}
+            style={{ 
+              padding: '8px 15px', 
+              background: '#444', 
+              border: 'none', 
+              borderRadius: '5px', 
+              color: 'white', 
+              cursor: paginaActual === 1 ? 'not-allowed' : 'pointer',
+              opacity: paginaActual === 1 ? 0.5 : 1
+            }}
+          >
+            ⬅ Anterior
+          </button>
+          
+          <span style={{ fontWeight: 'bold' }}>
+            Página {paginaActual} de {totalPaginas}
+          </span>
+          
+          <button 
+            onClick={() => cambiarPagina(paginaActual + 1)} 
+            disabled={paginaActual === totalPaginas}
+            style={{ 
+              padding: '8px 15px', 
+              background: '#444', 
+              border: 'none', 
+              borderRadius: '5px', 
+              color: 'white', 
+              cursor: paginaActual === totalPaginas ? 'not-allowed' : 'pointer',
+              opacity: paginaActual === totalPaginas ? 0.5 : 1
+            }}
+          >
+            Siguiente ➡
+          </button>
+        </div>
+      )}
+      
+      <div style={{textAlign: 'right', marginTop: '10px', fontSize: '0.8em', color: '#666'}}>
+        Total registros: {datos.length}
+      </div>
     </div>
   );
 };
