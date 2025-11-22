@@ -40,7 +40,18 @@ def configurar_modelo():
 
         if target_model:
             print(f"✅ Modelo IA seleccionado: {target_model}")
-            return genai.GenerativeModel(target_model)
+            
+            # --- AQUÍ REACTIVAMOS LA BÚSQUEDA WEB ---
+            tools_config = [
+                {"google_search": {}} 
+            ]
+            
+            # Intentamos cargar con herramientas
+            try:
+                return genai.GenerativeModel(target_model, tools=tools_config)
+            except Exception as e:
+                print(f"⚠️ No se pudo activar Search en {target_model}, usando modo estándar. Error: {e}")
+                return genai.GenerativeModel(target_model)
         else:
             return None
     except Exception as e:
@@ -53,7 +64,6 @@ model = configurar_modelo()
 URL_BITACORA = "https://docs.google.com/spreadsheets/d/e/2PACX-1vR0-Uk3fi9iIO1XHja2j3nFlcy4NofCDsjzPh69-4D1jJkDUwq7E5qY1S201_e_0ODIk5WksS_ezYHi/pub?gid=643804140&single=true&output=csv"
 URL_VENTAS = "https://docs.google.com/spreadsheets/d/e/2PACX-1vR0-Uk3fi9iIO1XHja2j3nFlcy4NofCDsjzPh69-4D1jJkDUwq7E5qY1S201_e_0ODIk5WksS_ezYHi/pub?gid=0&single=true&output=csv"
 URL_NUEVA = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQiN48tufdUP4BDXv7cVrh80OI8Li2KqjXQ-4LalIFCJ9ZnMYHr3R4PvSrPDUsk_g/pub?output=csv"
-# Ya no necesitamos URL_DOCUMENTO_PDF fija, el usuario lo sube.
 URL_CALENDARIO = "TU_LINK_CALENDARIO_AQUI" 
 
 # --- HERRAMIENTAS ---
@@ -77,7 +87,7 @@ def cargar_csv(url):
 
 @app.get("/")
 def home():
-    return {"status": "online", "mensaje": "Backend V7.0 - Upload PDF Activo"}
+    return {"status": "online", "mensaje": "Backend V8.0 - IA Total (Datos + PDF + Search)"}
 
 @app.get("/api/dashboard")
 def get_dashboard_data():
@@ -118,11 +128,11 @@ def get_dashboard_data():
         "calendario": datos_calendario
     }
 
-# --- CHAT CON SOPORTE DE ARCHIVOS ---
+# --- CHAT CON SOPORTE DE ARCHIVOS Y BÚSQUEDA ---
 @app.post("/api/chat")
 async def chat_con_datos(
-    pregunta: str = Form(...), # Recibe texto
-    file: UploadFile = File(None) # Recibe archivo opcional
+    pregunta: str = Form(...), 
+    file: UploadFile = File(None)
 ):
     global model
     if not model:
@@ -141,7 +151,6 @@ async def chat_con_datos(
     if file:
         try:
             nombre_archivo = file.filename
-            print(f"📥 Procesando archivo subido: {nombre_archivo}")
             content = await file.read()
             pdf_file = io.BytesIO(content)
             reader = pypdf.PdfReader(pdf_file)
@@ -150,17 +159,20 @@ async def chat_con_datos(
         except Exception as e:
             texto_pdf_usuario = f"Error al leer el archivo adjunto: {str(e)}"
 
-    # 3. Contexto
-    contexto = "Eres un asistente experto en análisis de datos para el Dashboard MinCYT.\n"
-    contexto += "Responde basándote en la siguiente información:\n\n"
+    # 3. Contexto Híbrido (Datos + Web + PDF)
+    contexto = "Eres un analista experto del MinCYT. Tienes tres fuentes de información:\n"
+    contexto += "1. DATOS INTERNOS: Los CSV del dashboard.\n"
+    contexto += "2. DOCUMENTOS: PDFs adjuntos por el usuario.\n"
+    contexto += "3. BÚSQUEDA WEB: Tienes habilitada la búsqueda en Google. Úsala libremente para buscar datos externos (ej: cotización bitcoin, noticias, leyes) si la pregunta lo requiere.\n\n"
     
+    contexto += "DATOS DEL DASHBOARD:\n"
     if df_ventas is not None:
-        contexto += f"--- DATOS INTERNOS: VENTAS ---\n{df_ventas.head(50).to_csv(index=False)}\n\n"
+        contexto += f"--- VENTAS (Resumen) ---\n{df_ventas.head(50).to_csv(index=False)}\n\n"
     if df_extra is not None:
-        contexto += f"--- DATOS INTERNOS: CALENDARIO ---\n{df_extra.head(50).to_csv(index=False)}\n\n"
+        contexto += f"--- CALENDARIO/EXTRA (Resumen) ---\n{df_extra.head(50).to_csv(index=False)}\n\n"
         
     if texto_pdf_usuario:
-        contexto += f"--- ARCHIVO ADJUNTO POR EL USUARIO ({nombre_archivo}) ---\n{texto_pdf_usuario[:50000]}\n\n"
+        contexto += f"--- ARCHIVO ADJUNTO ({nombre_archivo}) ---\n{texto_pdf_usuario[:50000]}\n\n"
         
     contexto += f"PREGUNTA: {pregunta}\nRESPUESTA:"
 
