@@ -102,17 +102,18 @@ function App() {
   );
 }
 
-// --- CHATBOT CON SUBIDA DE ARCHIVOS ---
+// --- CHATBOT CON EXPANSIÓN ---
 const ChatBotWidget = ({ apiUrl }) => {
   const [isOpen, setIsOpen] = useState(false);
-  const [messages, setMessages] = useState([{ sender: 'bot', text: '👋 Hola! Pregúntame sobre el dashboard o sube un PDF para analizarlo.' }]);
+  const [isExpanded, setIsExpanded] = useState(false); // Nuevo estado para expansión
+  const [messages, setMessages] = useState([{ sender: 'bot', text: '👋 Hola! Soy tu asistente de IA. Pregúntame sobre los datos o sube un PDF.' }]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
-  const [selectedFile, setSelectedFile] = useState(null); // Estado para el archivo
+  const [selectedFile, setSelectedFile] = useState(null);
   const messagesEndRef = useRef(null);
-  const fileInputRef = useRef(null); // Referencia al input oculto
+  const fileInputRef = useRef(null);
 
-  useEffect(() => messagesEndRef.current?.scrollIntoView({ behavior: "smooth" }), [messages]);
+  useEffect(() => messagesEndRef.current?.scrollIntoView({ behavior: "smooth" }), [messages, isExpanded]);
 
   const handleFileSelect = (e) => {
     if (e.target.files && e.target.files[0]) {
@@ -132,22 +133,15 @@ const ChatBotWidget = ({ apiUrl }) => {
     
     setInput('');
     const fileToSend = selectedFile;
-    setSelectedFile(null); // Limpiar selección
+    setSelectedFile(null);
     setLoading(true);
 
     try {
-      // Usamos FormData para enviar texto + archivo
       const formData = new FormData();
       formData.append('pregunta', userMsg || "Analiza este documento adjunto.");
-      if (fileToSend) {
-        formData.append('file', fileToSend);
-      }
+      if (fileToSend) formData.append('file', fileToSend);
 
-      const res = await fetch(`${apiUrl}/api/chat`, {
-        method: 'POST',
-        body: formData // fetch pone el header multipart automáticamente
-      });
-      
+      const res = await fetch(`${apiUrl}/api/chat`, { method: 'POST', body: formData });
       const data = await res.json();
       setMessages(prev => [...prev, { sender: 'bot', text: data.respuesta }]);
     } catch (error) {
@@ -157,63 +151,80 @@ const ChatBotWidget = ({ apiUrl }) => {
     }
   };
 
+  // Estilos dinámicos según si está expandido o no
+  const chatStyle = isExpanded ? {
+    width: '90vw', 
+    height: '80vh', 
+    bottom: '20px', 
+    right: '5vw'
+  } : {
+    width: '350px', 
+    height: '500px', 
+    bottom: '20px', 
+    right: '20px'
+  };
+
   return (
-    <div style={{ position: 'fixed', bottom: '20px', right: '20px', zIndex: 1000 }}>
+    <div style={{ position: 'fixed', zIndex: 1000, ...chatStyle, pointerEvents: 'none' }}>
+      {/* Botón Flotante (solo si cerrado) */}
       {!isOpen && (
-        <button onClick={() => setIsOpen(true)} style={{width:'60px', height:'60px', borderRadius:'50%', background:'#646cff', color:'white', border:'none', cursor:'pointer', fontSize:'30px', boxShadow:'0 4px 12px rgba(0,0,0,0.3)', display:'flex', alignItems:'center', justifyContent:'center'}}>🤖</button>
+        <div style={{position: 'absolute', bottom: 0, right: 0, pointerEvents: 'auto'}}>
+          <button onClick={() => setIsOpen(true)} style={{width:'60px', height:'60px', borderRadius:'50%', background:'#646cff', color:'white', border:'none', cursor:'pointer', fontSize:'30px', boxShadow:'0 4px 12px rgba(0,0,0,0.3)', display:'flex', alignItems:'center', justifyContent:'center'}}>🤖</button>
+        </div>
       )}
 
+      {/* Ventana de Chat */}
       {isOpen && (
-        <div style={{width:'350px', height:'500px', background:'#1a1a1a', borderRadius:'12px', boxShadow:'0 8px 24px rgba(0,0,0,0.5)', display:'flex', flexDirection:'column', overflow:'hidden', border:'1px solid #333'}}>
-          <div style={{ padding: '15px', background: '#646cff', color: 'white', display: 'flex', justifyContent: 'space-between' }}>
-            <strong>Asistente IA</strong>
-            <button onClick={() => setIsOpen(false)} style={{background:'transparent', border:'none', color:'white', cursor:'pointer'}}>✕</button>
+        <div style={{
+          width: '100%', height: '100%', background: '#1a1a1a', borderRadius: '12px',
+          boxShadow: '0 8px 30px rgba(0,0,0,0.7)', display: 'flex', flexDirection: 'column',
+          overflow: 'hidden', border: '1px solid #444', pointerEvents: 'auto'
+        }}>
+          <div style={{ padding: '15px', background: '#646cff', color: 'white', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <strong style={{fontSize: isExpanded ? '1.2em' : '1em'}}>Asistente IA {isExpanded ? '(Modo Pantalla Grande)' : ''}</strong>
+            <div style={{display: 'flex', gap: '10px'}}>
+              {/* Botón Expandir/Contraer */}
+              <button 
+                onClick={() => setIsExpanded(!isExpanded)} 
+                title={isExpanded ? "Reducir" : "Expandir"}
+                style={{background:'rgba(255,255,255,0.2)', border:'none', color:'white', cursor:'pointer', padding: '5px 10px', borderRadius: '4px'}}
+              >
+                {isExpanded ? '↘️' : '↖️'}
+              </button>
+              {/* Botón Cerrar */}
+              <button onClick={() => setIsOpen(false)} style={{background:'transparent', border:'none', color:'white', cursor:'pointer', fontSize: '1.2em'}}>✕</button>
+            </div>
           </div>
           
-          <div style={{ flex: 1, padding: '15px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+          <div style={{ flex: 1, padding: '20px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '15px', fontSize: isExpanded ? '1.1em' : '0.9em' }}>
             {messages.map((msg, i) => (
-              <div key={i} style={{alignSelf: msg.sender === 'user' ? 'flex-end' : 'flex-start', background: msg.sender === 'user' ? '#646cff' : '#333', color: 'white', padding: '10px', borderRadius: '8px', maxWidth: '80%', fontSize: '0.9em'}}>
-                {msg.file && <div style={{fontSize:'0.8em', background:'rgba(0,0,0,0.2)', padding:'2px 5px', borderRadius:'4px', marginBottom:'5px'}}>📄 {msg.file}</div>}
+              <div key={i} style={{alignSelf: msg.sender === 'user' ? 'flex-end' : 'flex-start', background: msg.sender === 'user' ? '#646cff' : '#333', color: 'white', padding: '12px', borderRadius: '8px', maxWidth: '85%', lineHeight: '1.5'}}>
+                {msg.file && <div style={{fontSize:'0.8em', background:'rgba(0,0,0,0.2)', padding:'4px 8px', borderRadius:'4px', marginBottom:'5px', display:'inline-block'}}>📄 {msg.file}</div>}
                 {msg.text}
               </div>
             ))}
-            {loading && <div style={{color:'#888', fontStyle:'italic', fontSize:'0.8em'}}>Escribiendo...</div>}
+            {loading && <div style={{color:'#888', fontStyle:'italic'}}>Escribiendo...</div>}
             <div ref={messagesEndRef} />
           </div>
 
-          {/* Área de Input + Archivo */}
-          <div style={{ padding: '10px', borderTop: '1px solid #333', display: 'flex', flexDirection: 'column', gap: '5px' }}>
+          <div style={{ padding: '15px', borderTop: '1px solid #333', display: 'flex', flexDirection: 'column', gap: '10px', background: '#222' }}>
             {selectedFile && (
-              <div style={{fontSize:'0.8em', color:'#888', display:'flex', justifyContent:'space-between', background:'#222', padding:'5px', borderRadius:'4px'}}>
+              <div style={{fontSize:'0.9em', color:'#ccc', display:'flex', justifyContent:'space-between', background:'#333', padding:'8px', borderRadius:'6px', alignItems: 'center'}}>
                 <span>📄 {selectedFile.name}</span>
-                <button onClick={() => setSelectedFile(null)} style={{border:'none', background:'transparent', color:'red', cursor:'pointer'}}>✕</button>
+                <button onClick={() => setSelectedFile(null)} style={{border:'none', background:'transparent', color:'#ff6b6b', cursor:'pointer', fontWeight: 'bold'}}>✕</button>
               </div>
             )}
-            <div style={{display: 'flex', gap: '5px'}}>
-              {/* Botón + (Clip) */}
-              <button 
-                onClick={() => fileInputRef.current.click()} 
-                style={{padding:'0 12px', borderRadius:'6px', background:'#444', color:'white', border:'none', cursor:'pointer', fontSize:'1.2em'}}
-                title="Adjuntar PDF"
-              >
-                +
-              </button>
-              <input 
-                type="file" 
-                ref={fileInputRef} 
-                onChange={handleFileSelect} 
-                accept=".pdf" 
-                style={{display:'none'}} 
-              />
-              
+            <div style={{display: 'flex', gap: '10px'}}>
+              <button onClick={() => fileInputRef.current.click()} style={{padding:'0 15px', borderRadius:'8px', background:'#444', color:'white', border:'none', cursor:'pointer', fontSize:'1.5em'}} title="Adjuntar PDF">+</button>
+              <input type="file" ref={fileInputRef} onChange={handleFileSelect} accept=".pdf" style={{display:'none'}} />
               <input 
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyPress={(e) => e.key === 'Enter' && handleSend()}
-                placeholder="Mensaje..."
-                style={{ flex: 1, padding: '10px', borderRadius: '6px', border: '1px solid #444', background: '#222', color: 'white' }}
+                placeholder="Escribe tu consulta..."
+                style={{ flex: 1, padding: '12px', borderRadius: '8px', border: '1px solid #555', background: '#333', color: 'white', fontSize: '1em' }}
               />
-              <button onClick={handleSend} style={{padding:'10px', borderRadius:'6px', background:'#646cff', color:'white', border:'none', cursor:'pointer'}}>➤</button>
+              <button onClick={handleSend} style={{padding:'0 20px', borderRadius:'8px', background:'#646cff', color:'white', border:'none', cursor:'pointer', fontSize:'1.2em'}}>➤</button>
             </div>
           </div>
         </div>
