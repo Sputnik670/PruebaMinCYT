@@ -18,21 +18,34 @@ app.add_middleware(
 )
 
 # --- CONFIGURACIÓN DE LA IA ---
-# 👇 ¡PEGA TU API KEY DE GEMINI AQUÍ! 👇
-GEMINI_API_KEY = "AIzaSyAR8xfyUCEcIlpeRWG36p7_3CFEsx85958" 
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
-# Configurar la IA si hay clave
-if GEMINI_API_KEY != "PEGAR_TU_CLAVE_AQUI":
+# Variable global para el modelo
+model = None
+
+if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
-    model = genai.GenerativeModel('gemini-1.5-flash')
+    try:
+        # Intentamos usar 'gemini-1.5-flash' primero
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        print("✅ Modelo IA configurado: gemini-1.5-flash")
+    except Exception as e:
+        print(f"⚠️ Error al configurar gemini-1.5-flash: {e}")
+        # Si falla, intentamos con 'gemini-pro' como fallback seguro
+        try:
+            model = genai.GenerativeModel('gemini-pro')
+            print("✅ Fallback: Modelo IA configurado como gemini-pro")
+        except Exception as e2:
+            print(f"❌ Error crítico configurando IA: {e2}")
+            model = None
 else:
-    model = None
+    print("⚠️ ADVERTENCIA: No se encontró la GEMINI_API_KEY en las variables de entorno")
 
 # --- TUS ENLACES ---
 URL_BITACORA = "https://docs.google.com/spreadsheets/d/e/2PACX-1vR0-Uk3fi9iIO1XHja2j3nFlcy4NofCDsjzPh69-4D1jJkDUwq7E5qY1S201_e_0ODIk5WksS_ezYHi/pub?gid=643804140&single=true&output=csv"
 URL_VENTAS = "https://docs.google.com/spreadsheets/d/e/2PACX-1vR0-Uk3fi9iIO1XHja2j3nFlcy4NofCDsjzPh69-4D1jJkDUwq7E5qY1S201_e_0ODIk5WksS_ezYHi/pub?gid=0&single=true&output=csv"
 URL_NUEVA = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQiN48tufdUP4BDXv7cVrh80OI8Li2KqjXQ-4LalIFCJ9ZnMYHr3R4PvSrPDUsk_g/pub?output=csv"
-URL_CALENDARIO = "TU_LINK_CALENDARIO_AQUI" # Reemplaza si tienes el link nuevo
+URL_CALENDARIO = "TU_LINK_CALENDARIO_AQUI" 
 
 # --- HERRAMIENTAS ---
 def limpiar_dinero(valor):
@@ -47,7 +60,6 @@ def cargar_csv(url):
         if "TU_LINK" in url: return None
         response = requests.get(url)
         response.raise_for_status()
-        # Usamos utf-8 para tildes y decodificamos correctamente
         df = pd.read_csv(io.BytesIO(response.content), encoding='utf-8')
         df = df.fillna("")
         return df
@@ -55,20 +67,20 @@ def cargar_csv(url):
         print(f"Error cargando CSV {url}: {e}")
         return None
 
-# Modelo para recibir el mensaje del chat
 class ChatMessage(BaseModel):
     pregunta: str
 
 @app.get("/")
 def home():
-    return {"status": "online", "mensaje": "Backend V4.0 - Con IA Gemini"}
+    return {"status": "online", "mensaje": "Backend V4.2 - Fix IA Models"}
 
 @app.get("/api/dashboard")
 def get_dashboard_data():
-    # (Lógica original sin cambios para no romper nada)
+    # 1. Bitácora
     df_bitacora = cargar_csv(URL_BITACORA)
     datos_bitacora = df_bitacora.to_dict(orient="records") if df_bitacora is not None else []
 
+    # 2. Ventas
     df_ventas = cargar_csv(URL_VENTAS)
     datos_tendencia = []
     datos_ventas_crudos = []
@@ -88,9 +100,11 @@ def get_dashboard_data():
                 columns={'FechaStr': 'fecha', 'MontoLimpio': 'monto'}
             ).to_dict(orient="records")
 
+    # 3. Nueva Tabla
     df_nueva = cargar_csv(URL_NUEVA)
     datos_nueva_tabla = df_nueva.to_dict(orient="records") if df_nueva is not None else []
 
+    # 4. Calendario
     df_cal = cargar_csv(URL_CALENDARIO)
     datos_calendario = df_cal.to_dict(orient="records") if df_cal is not None else []
 
@@ -102,34 +116,44 @@ def get_dashboard_data():
         "calendario": datos_calendario
     }
 
-# --- NUEVO ENDPOINT DE CHAT ---
 @app.post("/api/chat")
 def chat_con_datos(mensaje: ChatMessage):
+    # Verificación robusta de la API Key y el Modelo
+    if not GEMINI_API_KEY:
+        return {"respuesta": "⚠️ Error: API Key no configurada en Render."}
+    
+    # Si el modelo no se inicializó al principio, intentamos una última vez
+    global model
     if not model:
-        return {"respuesta": "⚠️ Error: No se ha configurado la API Key de Gemini en el servidor."}
+        try:
+            model = genai.GenerativeModel('gemini-pro') # Intento final con gemini-pro
+        except Exception:
+            # Si todo falla, listamos los modelos disponibles para debug
+            try:
+                modelos = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+                return {"respuesta": f"❌ Error: No se pudo cargar el modelo. Modelos disponibles: {modelos}"}
+            except:
+                return {"respuesta": "❌ Error crítico: La API Key parece inválida o no tiene permisos."}
 
-    # 1. Recopilar contexto (Leemos los datos frescos)
     df_ventas = cargar_csv(URL_VENTAS)
     df_bitacora = cargar_csv(URL_BITACORA)
     df_extra = cargar_csv(URL_NUEVA)
     
-    # Convertimos a texto resumido para que la IA lo lea
     contexto = "Eres un asistente experto en análisis de datos para el Dashboard MinCYT.\n"
-    contexto += "Aquí tienes los datos actuales del sistema:\n\n"
+    contexto += "Responde preguntas basándote en los siguientes datos:\n\n"
     
     if df_ventas is not None:
-        contexto += f"--- VENTAS E INVERSIONES ---\n{df_ventas.to_csv(index=False)}\n\n"
+        contexto += f"--- VENTAS ---\n{df_ventas.to_csv(index=False)}\n\n"
     if df_bitacora is not None:
-        contexto += f"--- BITÁCORA DE HORAS ---\n{df_bitacora.to_csv(index=False)}\n\n"
+        contexto += f"--- BITÁCORA ---\n{df_bitacora.to_csv(index=False)}\n\n"
     if df_extra is not None:
-        contexto += f"--- CALENDARIO/DATOS EXTRA ---\n{df_extra.to_csv(index=False)}\n\n"
+        contexto += f"--- EXTRA ---\n{df_extra.to_csv(index=False)}\n\n"
         
-    contexto += f"PREGUNTA DEL USUARIO: {mensaje.pregunta}\n"
-    contexto += "Responde de forma concisa, profesional y basada SOLO en los datos provistos. Si no sabes, dilo."
+    contexto += f"USUARIO: {mensaje.pregunta}\n"
+    contexto += "ASISTENTE:"
 
     try:
-        # 2. Preguntar a Gemini
         response = model.generate_content(contexto)
         return {"respuesta": response.text}
     except Exception as e:
-        return {"respuesta": f"Hubo un error al consultar a la IA: {str(e)}"}
+        return {"respuesta": f"Hubo un error al generar la respuesta: {str(e)}"}
