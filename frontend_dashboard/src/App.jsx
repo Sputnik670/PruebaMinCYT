@@ -9,7 +9,6 @@ function App() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
-  // 1. URL CORRECTA (Backend)
   const API_URL = "https://pruebamincyt.onrender.com";
 
   useEffect(() => {
@@ -20,18 +19,15 @@ function App() {
         return res.json();
       })
       .then(resultado => {
-        console.log("✅ Datos recibidos:", resultado);
         setData(resultado);
         setLoading(false);
       })
       .catch(err => {
-        console.error("❌ Error:", err);
         setError(err.message);
         setLoading(false);
       });
   }, []);
 
-  // 2. PROCESAMIENTO DE BITÁCORA
   const prepararBitacora = () => {
     if (!data?.bitacora) return [];
     const conteo = {};
@@ -43,27 +39,21 @@ function App() {
     return Object.keys(conteo).map(k => ({ name: k, horas: conteo[k] }));
   };
 
-  // 3. ESTILOS Y RENDERIZADO
-  if (loading) return <div style={{display:'flex', height:'100vh', alignItems:'center', justifyContent:'center'}}><h2>⏳ Cargando datos...</h2></div>;
+  if (loading) return <div style={{display:'flex', height:'100vh', alignItems:'center', justifyContent:'center'}}><h2>⏳ Cargando...</h2></div>;
   if (error) return <div style={{color:'red', padding:50, textAlign:'center'}}><h1>⚠️ Error</h1><p>{error}</p></div>;
 
   return (
     <div style={{ 
-      maxWidth: '1200px', 
-      margin: '0 auto', 
-      padding: '20px', 
-      fontFamily: 'Arial, sans-serif',
-      minHeight: '100vh',
-      overflowY: 'auto'
+      maxWidth: '1200px', margin: '0 auto', padding: '20px', 
+      fontFamily: 'Arial, sans-serif', minHeight: '100vh', overflowY: 'auto'
     }}>
-      <header style={{ textAlign: 'center', marginBottom: '50px' }}>
+      <header style={{ textAlign: 'center', marginBottom: '40px' }}>
         <h1 style={{ fontSize: '2.5rem' }}>🚀 Dashboard Maestro V2</h1>
-        <p style={{ color: '#666' }}>Conexión Directa a Google Sheets</p>
+        <p style={{ color: '#666' }}>Vista Compacta</p>
       </header>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(400px, 1fr))', gap: '30px' }}>
-        
-        {/* Gráfico 1 */}
+      {/* GRÁFICOS (Siempre visibles) */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(400px, 1fr))', gap: '30px', marginBottom: '40px' }}>
         <div style={{ background: '#1e1e1e', padding: '20px', borderRadius: '15px' }}>
           <h3 style={{ color: 'white' }}>⏱️ Horas por Tarea</h3>
           <div style={{ height: 300 }}>
@@ -79,7 +69,6 @@ function App() {
           </div>
         </div>
 
-        {/* Gráfico 2 */}
         <div style={{ background: '#1e1e1e', padding: '20px', borderRadius: '15px' }}>
           <h3 style={{ color: 'white' }}>💰 Tendencia de Inversión</h3>
           <div style={{ height: 300 }}>
@@ -96,116 +85,98 @@ function App() {
         </div>
       </div>
 
-      {/* Tabla Original */}
-      <div style={{ marginTop: '50px' }}>
-        <h3>📋 Registros de Ventas</h3>
+      {/* --- ACORDEÓN 1: VENTAS --- */}
+      <SeccionAcordeon titulo="📋 Registros de Ventas (Histórico)" defaultAbierto={false}>
         <TablaGenerica datos={data.ventas_tabla} filasPorPagina={5} />
-      </div>
+      </SeccionAcordeon>
 
-      {/* Tabla Nueva (Aquí es donde necesitas navegar) */}
-      <div style={{ marginTop: '50px', marginBottom: '100px' }}>
-        <h3 style={{ color: '#3498db' }}>📂 Datos Adicionales (Nueva Integración)</h3>
+      {/* --- ACORDEÓN 2: TABLA NUEVA --- */}
+      <SeccionAcordeon titulo="📂 Datos Adicionales..." defaultAbierto={false}>
         {data.extra_tabla && data.extra_tabla.length > 0 ? (
-          // Aquí activamos la paginación de 10 en 10
           <TablaGenerica datos={data.extra_tabla} filasPorPagina={10} />
         ) : (
-          <p style={{ color: '#666', fontStyle: 'italic' }}>
-            No hay datos disponibles.
-          </p>
+          <p style={{ color: '#666', fontStyle: 'italic' }}>Sin datos disponibles.</p>
         )}
-      </div>
+      </SeccionAcordeon>
 
     </div>
   );
 }
 
-// --- COMPONENTE DE TABLA INTELIGENTE CON PAGINACIÓN ---
+// --- COMPONENTE NUEVO: ACORDEÓN ---
+const SeccionAcordeon = ({ titulo, children, defaultAbierto = false }) => {
+  const [abierto, setAbierto] = useState(defaultAbierto);
+
+  return (
+    <div style={{ marginBottom: '20px', borderRadius: '10px', overflow: 'hidden', border: '1px solid #333' }}>
+      {/* Barra de Título (Clickeable) */}
+      <button 
+        onClick={() => setAbierto(!abierto)}
+        style={{
+          width: '100%',
+          background: '#2c3e50',
+          color: 'white',
+          padding: '15px 20px',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          border: 'none',
+          cursor: 'pointer',
+          fontSize: '1.1rem',
+          fontWeight: 'bold',
+          textAlign: 'left'
+        }}
+      >
+        <span>{titulo}</span>
+        <span style={{ transform: abierto ? 'rotate(180deg)' : 'rotate(0deg)', transition: '0.3s' }}>▼</span>
+      </button>
+
+      {/* Contenido Desplegable */}
+      {abierto && (
+        <div style={{ padding: '20px', background: '#1a1a1a' }}>
+          {children}
+        </div>
+      )}
+    </div>
+  );
+};
+
+// Componente Tabla (Igual que antes)
 const TablaGenerica = ({ datos, filasPorPagina = 10 }) => {
-  // Estado local para saber en qué página estamos
   const [paginaActual, setPaginaActual] = useState(1);
-
   if (!datos || datos.length === 0) return <p>Sin datos.</p>;
-
-  // Cálculos matemáticos para cortar la lista
   const totalPaginas = Math.ceil(datos.length / filasPorPagina);
   const indiceUltimo = paginaActual * filasPorPagina;
   const indicePrimero = indiceUltimo - filasPorPagina;
   const datosVisibles = datos.slice(indicePrimero, indiceUltimo);
-  
   const columnas = Object.keys(datos[0]);
-
-  // Función para cambiar página
   const cambiarPagina = (nuevaPagina) => {
-    if (nuevaPagina >= 1 && nuevaPagina <= totalPaginas) {
-      setPaginaActual(nuevaPagina);
-    }
+    if (nuevaPagina >= 1 && nuevaPagina <= totalPaginas) setPaginaActual(nuevaPagina);
   };
 
   return (
-    <div style={{ overflowX: 'auto', background: '#2a2a2a', padding: '20px', borderRadius: '10px' }}>
+    <div style={{ overflowX: 'auto' }}>
       <table style={{ width: '100%', borderCollapse: 'collapse', color: '#ccc', minWidth: '600px' }}>
         <thead>
           <tr style={{ borderBottom: '1px solid #555', textAlign:'left' }}>
-            {columnas.map(k => (
-              <th key={k} style={{ padding: 10, color: '#fff' }}>{k}</th>
-            ))}
+            {columnas.map(k => <th key={k} style={{ padding: 10, color: '#fff' }}>{k}</th>)}
           </tr>
         </thead>
         <tbody>
           {datosVisibles.map((row, i) => (
             <tr key={i} style={{ borderBottom: '1px solid #444' }}>
-              {columnas.map((col, j) => (
-                <td key={j} style={{ padding: 10 }}>{row[col]}</td>
-              ))}
+              {columnas.map((col, j) => <td key={j} style={{ padding: 10 }}>{row[col]}</td>)}
             </tr>
           ))}
         </tbody>
       </table>
-
-      {/* --- CONTROLES DE NAVEGACIÓN --- */}
       {totalPaginas > 1 && (
-        <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '20px', marginTop: '20px', color: '#ccc' }}>
-          <button 
-            onClick={() => cambiarPagina(paginaActual - 1)} 
-            disabled={paginaActual === 1}
-            style={{ 
-              padding: '8px 15px', 
-              background: '#444', 
-              border: 'none', 
-              borderRadius: '5px', 
-              color: 'white', 
-              cursor: paginaActual === 1 ? 'not-allowed' : 'pointer',
-              opacity: paginaActual === 1 ? 0.5 : 1
-            }}
-          >
-            ⬅ Anterior
-          </button>
-          
-          <span style={{ fontWeight: 'bold' }}>
-            Página {paginaActual} de {totalPaginas}
-          </span>
-          
-          <button 
-            onClick={() => cambiarPagina(paginaActual + 1)} 
-            disabled={paginaActual === totalPaginas}
-            style={{ 
-              padding: '8px 15px', 
-              background: '#444', 
-              border: 'none', 
-              borderRadius: '5px', 
-              color: 'white', 
-              cursor: paginaActual === totalPaginas ? 'not-allowed' : 'pointer',
-              opacity: paginaActual === totalPaginas ? 0.5 : 1
-            }}
-          >
-            Siguiente ➡
-          </button>
+        <div style={{ display: 'flex', justifyContent: 'center', gap: '20px', marginTop: '20px', color: '#ccc' }}>
+          <button onClick={() => cambiarPagina(paginaActual - 1)} disabled={paginaActual === 1} style={{padding:'5px 10px', cursor:'pointer', background:'#444', color:'white', border:'none', borderRadius:'4px'}}>⬅</button>
+          <span>Pág {paginaActual} de {totalPaginas}</span>
+          <button onClick={() => cambiarPagina(paginaActual + 1)} disabled={paginaActual === totalPaginas} style={{padding:'5px 10px', cursor:'pointer', background:'#444', color:'white', border:'none', borderRadius:'4px'}}>➡</button>
         </div>
       )}
-      
-      <div style={{textAlign: 'right', marginTop: '10px', fontSize: '0.8em', color: '#666'}}>
-        Total registros: {datos.length}
-      </div>
     </div>
   );
 };
