@@ -1,12 +1,11 @@
 import pandas as pd
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
 import io
 import requests
 import google.generativeai as genai
 import os
-import pypdf # <--- Nueva librería para leer PDFs
+import pypdf
 
 app = FastAPI()
 
@@ -29,22 +28,23 @@ def configurar_modelo():
 
     genai.configure(api_key=GEMINI_API_KEY)
     try:
-        # Buscamos el mejor modelo disponible (Pro > Flash)
         available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+        print(f"📋 Modelos disponibles: {available_models}")
         
-        # Prioridad: Gemini Pro
-        target_model = next((m for m in available_models if 'gemini-pro' in m and 'vision' not in m), None)
+        # Prioridad: Flash > Pro
+        target_model = next((m for m in available_models if 'gemini-1.5-flash' in m), None)
         if not target_model:
-            target_model = next((m for m in available_models if 'flash' in m), available_models[0] if available_models else None)
+            target_model = next((m for m in available_models if 'gemini-pro' in m and 'vision' not in m), None)
+        if not target_model and available_models:
+            target_model = available_models[0]
 
         if target_model:
             print(f"✅ Modelo IA seleccionado: {target_model}")
             return genai.GenerativeModel(target_model)
         else:
-            print("❌ No se encontraron modelos compatibles.")
             return None
     except Exception as e:
-        print(f"❌ Error crítico configurando IA: {e}")
+        print(f"❌ Error IA: {e}")
         return None
 
 model = configurar_modelo()
@@ -53,11 +53,8 @@ model = configurar_modelo()
 URL_BITACORA = "https://docs.google.com/spreadsheets/d/e/2PACX-1vR0-Uk3fi9iIO1XHja2j3nFlcy4NofCDsjzPh69-4D1jJkDUwq7E5qY1S201_e_0ODIk5WksS_ezYHi/pub?gid=643804140&single=true&output=csv"
 URL_VENTAS = "https://docs.google.com/spreadsheets/d/e/2PACX-1vR0-Uk3fi9iIO1XHja2j3nFlcy4NofCDsjzPh69-4D1jJkDUwq7E5qY1S201_e_0ODIk5WksS_ezYHi/pub?gid=0&single=true&output=csv"
 URL_NUEVA = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQiN48tufdUP4BDXv7cVrh80OI8Li2KqjXQ-4LalIFCJ9ZnMYHr3R4PvSrPDUsk_g/pub?output=csv"
+# Ya no necesitamos URL_DOCUMENTO_PDF fija, el usuario lo sube.
 URL_CALENDARIO = "TU_LINK_CALENDARIO_AQUI" 
-
-# 👇 ¡NUEVO: PEGA AQUÍ EL LINK DIRECTO DE TU PDF! 👇
-# Nota: Si es Google Drive, asegúrate de usar un link de descarga directa, no de vista previa.
-URL_DOCUMENTO_PDF = "TU_LINK_PDF_AQUI" 
 
 # --- HERRAMIENTAS ---
 def limpiar_dinero(valor):
@@ -76,41 +73,15 @@ def cargar_csv(url):
         df = df.fillna("")
         return df
     except Exception as e:
-        print(f"Error CSV {url}: {e}")
         return None
-
-# --- NUEVA FUNCIÓN PARA LEER PDF ---
-def cargar_pdf_texto(url):
-    try:
-        if "TU_LINK" in url or not url: return ""
-        print(f"📥 Descargando PDF desde: {url}")
-        response = requests.get(url)
-        response.raise_for_status()
-        
-        # Leemos el PDF desde la memoria
-        pdf_file = io.BytesIO(response.content)
-        reader = pypdf.PdfReader(pdf_file)
-        
-        texto_completo = ""
-        for i, page in enumerate(reader.pages):
-            texto_completo += f"--- Página {i+1} ---\n{page.extract_text()}\n"
-            
-        print(f"✅ PDF procesado exitosamente ({len(reader.pages)} páginas)")
-        return texto_completo
-    except Exception as e:
-        print(f"⚠️ Error leyendo PDF: {e}")
-        return ""
-
-class ChatMessage(BaseModel):
-    pregunta: str
 
 @app.get("/")
 def home():
-    return {"status": "online", "mensaje": "Backend V6.0 - Lector de Documentos PDF Activo"}
+    return {"status": "online", "mensaje": "Backend V7.0 - Upload PDF Activo"}
 
 @app.get("/api/dashboard")
 def get_dashboard_data():
-    # (Lógica de Dashboard igual que antes para no romper el frontend)
+    # (Lógica Dashboard igual...)
     df_bitacora = cargar_csv(URL_BITACORA)
     datos_bitacora = df_bitacora.to_dict(orient="records") if df_bitacora is not None else []
 
@@ -147,43 +118,54 @@ def get_dashboard_data():
         "calendario": datos_calendario
     }
 
+# --- CHAT CON SOPORTE DE ARCHIVOS ---
 @app.post("/api/chat")
-def chat_con_datos(mensaje: ChatMessage):
+async def chat_con_datos(
+    pregunta: str = Form(...), # Recibe texto
+    file: UploadFile = File(None) # Recibe archivo opcional
+):
     global model
     if not model:
         model = configurar_modelo()
         if not model:
-            return {"respuesta": "❌ Error: IA no disponible. Verifica API Key en Render."}
+            return {"respuesta": "❌ Error: IA no disponible."}
 
-    # 1. Cargar Datos Numéricos
+    # 1. Cargar CSVs internos
     df_ventas = cargar_csv(URL_VENTAS)
     df_bitacora = cargar_csv(URL_BITACORA)
     df_extra = cargar_csv(URL_NUEVA)
     
-    # 2. Cargar Documento PDF (¡NUEVO!)
-    texto_pdf = cargar_pdf_texto(URL_DOCUMENTO_PDF)
-    
-    # 3. Armar el "Cerebro" del Contexto
-    contexto = "Eres un analista experto del MinCYT. Tienes acceso a datos numéricos y documentación oficial.\n"
+    # 2. Procesar Archivo Subido (Si existe)
+    texto_pdf_usuario = ""
+    nombre_archivo = ""
+    if file:
+        try:
+            nombre_archivo = file.filename
+            print(f"📥 Procesando archivo subido: {nombre_archivo}")
+            content = await file.read()
+            pdf_file = io.BytesIO(content)
+            reader = pypdf.PdfReader(pdf_file)
+            for i, page in enumerate(reader.pages):
+                texto_pdf_usuario += f"[Página {i+1}] {page.extract_text()}\n"
+        except Exception as e:
+            texto_pdf_usuario = f"Error al leer el archivo adjunto: {str(e)}"
+
+    # 3. Contexto
+    contexto = "Eres un asistente experto en análisis de datos para el Dashboard MinCYT.\n"
     contexto += "Responde basándote en la siguiente información:\n\n"
     
     if df_ventas is not None:
-        contexto += f"--- DATOS: VENTAS (Resumen) ---\n{df_ventas.head(50).to_csv(index=False)}\n\n"
+        contexto += f"--- DATOS INTERNOS: VENTAS ---\n{df_ventas.head(50).to_csv(index=False)}\n\n"
     if df_extra is not None:
-        contexto += f"--- DATOS: CALENDARIO/EXTRA ---\n{df_extra.head(50).to_csv(index=False)}\n\n"
+        contexto += f"--- DATOS INTERNOS: CALENDARIO ---\n{df_extra.head(50).to_csv(index=False)}\n\n"
         
-    if texto_pdf:
-        # Limitamos el texto del PDF a ~30.000 caracteres para no saturar, si es muy largo.
-        # Gemini Pro aguanta mucho, pero por seguridad y velocidad.
-        contexto += f"--- DOCUMENTACIÓN ADJUNTA (PDF) ---\n{texto_pdf[:30000]}\n...\n(Fin del extracto)\n\n"
-    else:
-        contexto += "--- DOCUMENTACIÓN (PDF) ---\nNo se pudo cargar o no hay documento asignado.\n\n"
+    if texto_pdf_usuario:
+        contexto += f"--- ARCHIVO ADJUNTO POR EL USUARIO ({nombre_archivo}) ---\n{texto_pdf_usuario[:50000]}\n\n"
         
-    contexto += f"PREGUNTA DEL USUARIO: {mensaje.pregunta}\n"
-    contexto += "RESPUESTA:"
+    contexto += f"PREGUNTA: {pregunta}\nRESPUESTA:"
 
     try:
         response = model.generate_content(contexto)
         return {"respuesta": response.text}
     except Exception as e:
-        return {"respuesta": f"Error procesando respuesta: {str(e)}"}
+        return {"respuesta": f"Error en la IA: {str(e)}"}

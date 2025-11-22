@@ -9,7 +9,6 @@ function App() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
-  // URL de tu Backend en Render
   const API_URL = "https://pruebamincyt.onrender.com";
 
   useEffect(() => {
@@ -34,7 +33,6 @@ function App() {
     const conteo = {};
     data.bitacora.forEach(row => {
       const tipo = row['Tipo'] || 'Otros';
-      // Corrección de horas
       const horas = parseFloat(row['Duración (hs)'] || row['Duracion']) || 0;
       conteo[tipo] = (conteo[tipo] || 0) + horas;
     });
@@ -54,7 +52,6 @@ function App() {
         <p style={{ color: '#666' }}>Gestión Inteligente con IA</p>
       </header>
 
-      {/* GRÁFICOS */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(400px, 1fr))', gap: '30px', marginBottom: '40px' }}>
         <div style={{ background: '#1e1e1e', padding: '20px', borderRadius: '15px' }}>
           <h3 style={{ color: 'white' }}>⏱️ Horas por Tarea</h3>
@@ -87,7 +84,6 @@ function App() {
         </div>
       </div>
 
-      {/* ACORDEONES */}
       <SeccionAcordeon titulo="📋 Registros de Ventas (Histórico)" defaultAbierto={false}>
         <TablaGenerica datos={data.ventas_tabla} filasPorPagina={5} />
       </SeccionAcordeon>
@@ -100,47 +96,62 @@ function App() {
         )}
       </SeccionAcordeon>
 
-      {/* --- AQUÍ ESTÁ EL WIDGET DEL CHAT --- */}
       <ChatBotWidget apiUrl={API_URL} />
 
     </div>
   );
 }
 
-// --- COMPONENTE CHATBOT ---
+// --- CHATBOT CON SUBIDA DE ARCHIVOS ---
 const ChatBotWidget = ({ apiUrl }) => {
   const [isOpen, setIsOpen] = useState(false);
-  const [messages, setMessages] = useState([
-    { sender: 'bot', text: '👋 Hola! Soy tu asistente de IA. Pregúntame sobre los datos del dashboard.' }
-  ]);
+  const [messages, setMessages] = useState([{ sender: 'bot', text: '👋 Hola! Pregúntame sobre el dashboard o sube un PDF para analizarlo.' }]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
+  const [selectedFile, setSelectedFile] = useState(null); // Estado para el archivo
   const messagesEndRef = useRef(null);
+  const fileInputRef = useRef(null); // Referencia al input oculto
 
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  useEffect(() => messagesEndRef.current?.scrollIntoView({ behavior: "smooth" }), [messages]);
+
+  const handleFileSelect = (e) => {
+    if (e.target.files && e.target.files[0]) {
+      setSelectedFile(e.target.files[0]);
+    }
   };
 
-  useEffect(scrollToBottom, [messages]);
-
   const handleSend = async () => {
-    if (!input.trim()) return;
+    if (!input.trim() && !selectedFile) return;
     
     const userMsg = input;
-    setMessages(prev => [...prev, { sender: 'user', text: userMsg }]);
+    setMessages(prev => [...prev, { 
+      sender: 'user', 
+      text: userMsg, 
+      file: selectedFile ? selectedFile.name : null 
+    }]);
+    
     setInput('');
+    const fileToSend = selectedFile;
+    setSelectedFile(null); // Limpiar selección
     setLoading(true);
 
     try {
+      // Usamos FormData para enviar texto + archivo
+      const formData = new FormData();
+      formData.append('pregunta', userMsg || "Analiza este documento adjunto.");
+      if (fileToSend) {
+        formData.append('file', fileToSend);
+      }
+
       const res = await fetch(`${apiUrl}/api/chat`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ pregunta: userMsg })
+        body: formData // fetch pone el header multipart automáticamente
       });
+      
       const data = await res.json();
       setMessages(prev => [...prev, { sender: 'bot', text: data.respuesta }]);
     } catch (error) {
-      setMessages(prev => [...prev, { sender: 'bot', text: 'Error al conectar con el cerebro.' }]);
+      setMessages(prev => [...prev, { sender: 'bot', text: 'Error al conectar.' }]);
     } finally {
       setLoading(false);
     }
@@ -149,50 +160,61 @@ const ChatBotWidget = ({ apiUrl }) => {
   return (
     <div style={{ position: 'fixed', bottom: '20px', right: '20px', zIndex: 1000 }}>
       {!isOpen && (
-        <button 
-          onClick={() => setIsOpen(true)}
-          style={{
-            width: '60px', height: '60px', borderRadius: '50%', background: '#646cff', 
-            color: 'white', border: 'none', cursor: 'pointer', fontSize: '30px',
-            boxShadow: '0 4px 12px rgba(0,0,0,0.3)', display: 'flex', alignItems: 'center', justifyContent: 'center'
-          }}
-        >
-          🤖
-        </button>
+        <button onClick={() => setIsOpen(true)} style={{width:'60px', height:'60px', borderRadius:'50%', background:'#646cff', color:'white', border:'none', cursor:'pointer', fontSize:'30px', boxShadow:'0 4px 12px rgba(0,0,0,0.3)', display:'flex', alignItems:'center', justifyContent:'center'}}>🤖</button>
       )}
 
       {isOpen && (
-        <div style={{
-          width: '350px', height: '500px', background: '#1a1a1a', borderRadius: '12px',
-          boxShadow: '0 8px 24px rgba(0,0,0,0.5)', display: 'flex', flexDirection: 'column',
-          overflow: 'hidden', border: '1px solid #333'
-        }}>
+        <div style={{width:'350px', height:'500px', background:'#1a1a1a', borderRadius:'12px', boxShadow:'0 8px 24px rgba(0,0,0,0.5)', display:'flex', flexDirection:'column', overflow:'hidden', border:'1px solid #333'}}>
           <div style={{ padding: '15px', background: '#646cff', color: 'white', display: 'flex', justifyContent: 'space-between' }}>
             <strong>Asistente IA</strong>
             <button onClick={() => setIsOpen(false)} style={{background:'transparent', border:'none', color:'white', cursor:'pointer'}}>✕</button>
           </div>
+          
           <div style={{ flex: 1, padding: '15px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '10px' }}>
             {messages.map((msg, i) => (
-              <div key={i} style={{
-                alignSelf: msg.sender === 'user' ? 'flex-end' : 'flex-start',
-                background: msg.sender === 'user' ? '#646cff' : '#333',
-                color: 'white', padding: '10px', borderRadius: '8px', maxWidth: '80%', fontSize: '0.9em'
-              }}>
+              <div key={i} style={{alignSelf: msg.sender === 'user' ? 'flex-end' : 'flex-start', background: msg.sender === 'user' ? '#646cff' : '#333', color: 'white', padding: '10px', borderRadius: '8px', maxWidth: '80%', fontSize: '0.9em'}}>
+                {msg.file && <div style={{fontSize:'0.8em', background:'rgba(0,0,0,0.2)', padding:'2px 5px', borderRadius:'4px', marginBottom:'5px'}}>📄 {msg.file}</div>}
                 {msg.text}
               </div>
             ))}
             {loading && <div style={{color:'#888', fontStyle:'italic', fontSize:'0.8em'}}>Escribiendo...</div>}
             <div ref={messagesEndRef} />
           </div>
-          <div style={{ padding: '10px', borderTop: '1px solid #333', display: 'flex', gap: '5px' }}>
-            <input 
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyPress={(e) => e.key === 'Enter' && handleSend()}
-              placeholder="Pregunta algo..."
-              style={{ flex: 1, padding: '10px', borderRadius: '6px', border: '1px solid #444', background: '#222', color: 'white' }}
-            />
-            <button onClick={handleSend} style={{padding:'10px', borderRadius:'6px', background:'#646cff', color:'white', border:'none', cursor:'pointer'}}>➤</button>
+
+          {/* Área de Input + Archivo */}
+          <div style={{ padding: '10px', borderTop: '1px solid #333', display: 'flex', flexDirection: 'column', gap: '5px' }}>
+            {selectedFile && (
+              <div style={{fontSize:'0.8em', color:'#888', display:'flex', justifyContent:'space-between', background:'#222', padding:'5px', borderRadius:'4px'}}>
+                <span>📄 {selectedFile.name}</span>
+                <button onClick={() => setSelectedFile(null)} style={{border:'none', background:'transparent', color:'red', cursor:'pointer'}}>✕</button>
+              </div>
+            )}
+            <div style={{display: 'flex', gap: '5px'}}>
+              {/* Botón + (Clip) */}
+              <button 
+                onClick={() => fileInputRef.current.click()} 
+                style={{padding:'0 12px', borderRadius:'6px', background:'#444', color:'white', border:'none', cursor:'pointer', fontSize:'1.2em'}}
+                title="Adjuntar PDF"
+              >
+                +
+              </button>
+              <input 
+                type="file" 
+                ref={fileInputRef} 
+                onChange={handleFileSelect} 
+                accept=".pdf" 
+                style={{display:'none'}} 
+              />
+              
+              <input 
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyPress={(e) => e.key === 'Enter' && handleSend()}
+                placeholder="Mensaje..."
+                style={{ flex: 1, padding: '10px', borderRadius: '6px', border: '1px solid #444', background: '#222', color: 'white' }}
+              />
+              <button onClick={handleSend} style={{padding:'10px', borderRadius:'6px', background:'#646cff', color:'white', border:'none', cursor:'pointer'}}>➤</button>
+            </div>
           </div>
         </div>
       )}
@@ -200,7 +222,7 @@ const ChatBotWidget = ({ apiUrl }) => {
   );
 };
 
-// --- COMPONENTES UI (Acordeón y Tabla) ---
+// --- COMPONENTES UI (Igual que antes) ---
 const SeccionAcordeon = ({ titulo, children, defaultAbierto = false }) => {
   const [abierto, setAbierto] = useState(defaultAbierto);
   return (
