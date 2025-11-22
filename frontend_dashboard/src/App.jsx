@@ -9,13 +9,11 @@ function App() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
-  // URL FIJA DE RENDER (Sin el guion extra)
+  // 1. URL CORRECTA (Backend)
   const API_URL = "https://pruebamincyt.onrender.com";
 
   useEffect(() => {
-    console.log("📡 Conectando al nuevo backend...");
-    
-    // Hacemos UNA sola petición al endpoint maestro
+    console.log("📡 Conectando...");
     fetch(`${API_URL}/api/dashboard`)
       .then(res => {
         if (!res.ok) throw new Error(`Error HTTP: ${res.status}`);
@@ -27,54 +25,38 @@ function App() {
         setLoading(false);
       })
       .catch(err => {
-        console.error("❌ Error fatal:", err);
+        console.error("❌ Error:", err);
         setError(err.message);
         setLoading(false);
       });
   }, []);
 
-  // --- PROCESAMIENTO LOCAL SIMPLE ---
-  // Preparamos los datos de bitácora para el gráfico de barras
+  // 2. PROCESAMIENTO DE BITÁCORA (Corrección Hs -> horas)
   const prepararBitacora = () => {
     if (!data?.bitacora) return [];
     const conteo = {};
     data.bitacora.forEach(row => {
       const tipo = row['Tipo'] || 'Otros';
-      // Intentamos leer 'Duración (hs)' o 'Duracion', si falla es 1 hora por defecto
       const horas = parseFloat(row['Duración (hs)'] || row['Duracion']) || 0;
-      
-      // --- CORRECCIÓN AQUÍ ---
-      // Antes decía: +Hs (Error) -> Ahora dice: +horas (Correcto)
       conteo[tipo] = (conteo[tipo] || 0) + horas;
     });
     return Object.keys(conteo).map(k => ({ name: k, horas: conteo[k] }));
   };
 
-  // --- RENDERIZADO ---
-
-  if (loading) return (
-    <div style={{display:'flex', justifyContent:'center', alignItems:'center', height:'100vh'}}>
-      <h2>⏳ Cargando datos del sistema...</h2>
-    </div>
-  );
-
-  if (error) return (
-    <div style={{color: 'red', padding: 50, textAlign: 'center'}}>
-      <h1>⚠️ Error de Conexión</h1>
-      <p>{error}</p>
-      <p>Verifica que el backend en Render haya terminado el deploy.</p>
-    </div>
-  );
+  // 3. ESTILOS Y RENDERIZADO
+  if (loading) return <div style={{display:'flex', height:'100vh', alignItems:'center', justifyContent:'center'}}><h2>⏳ Cargando...</h2></div>;
+  if (error) return <div style={{color:'red', padding:50, textAlign:'center'}}><h1>⚠️ Error</h1><p>{error}</p></div>;
 
   return (
-  <div style={{ 
+    // 4. SCROLL HABILITADO (minHeight + overflow)
+    <div style={{ 
       maxWidth: '1200px', 
       margin: '0 auto', 
       padding: '20px', 
       fontFamily: 'Arial, sans-serif',
-      minHeight: '100vh', 
-      overflowY: 'auto' 
-  }}>
+      minHeight: '100vh',
+      overflowY: 'auto'
+    }}>
       <header style={{ textAlign: 'center', marginBottom: '50px' }}>
         <h1 style={{ fontSize: '2.5rem' }}>🚀 Dashboard Maestro V2</h1>
         <p style={{ color: '#666' }}>Conexión Directa a Google Sheets</p>
@@ -82,7 +64,7 @@ function App() {
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(400px, 1fr))', gap: '30px' }}>
         
-        {/* GRÁFICO 1: BARRAS (BITÁCORA) */}
+        {/* Gráfico 1 */}
         <div style={{ background: '#1e1e1e', padding: '20px', borderRadius: '15px' }}>
           <h3 style={{ color: 'white' }}>⏱️ Horas por Tarea</h3>
           <div style={{ height: 300 }}>
@@ -98,7 +80,7 @@ function App() {
           </div>
         </div>
 
-        {/* GRÁFICO 2: LÍNEAS (DINERO) */}
+        {/* Gráfico 2 */}
         <div style={{ background: '#1e1e1e', padding: '20px', borderRadius: '15px' }}>
           <h3 style={{ color: 'white' }}>💰 Tendencia de Inversión</h3>
           <div style={{ height: 300 }}>
@@ -107,10 +89,7 @@ function App() {
                 <CartesianGrid strokeDasharray="3 3" stroke="#444" />
                 <XAxis dataKey="fecha" stroke="#ccc" />
                 <YAxis stroke="#ccc" />
-                <Tooltip 
-                  contentStyle={{backgroundColor: '#333', border: 'none'}}
-                  formatter={(val) => `$ ${val.toLocaleString()}`}
-                />
+                <Tooltip contentStyle={{backgroundColor: '#333', border: 'none'}} formatter={(val) => `$ ${val.toLocaleString()}`}/>
                 <Line type="monotone" dataKey="monto" stroke="#82ca9d" strokeWidth={3} />
               </LineChart>
             </ResponsiveContainer>
@@ -118,32 +97,57 @@ function App() {
         </div>
       </div>
 
-      {/* TABLA DE DATOS CRUDOS (DEBUG) */}
+      {/* Tabla Original */}
       <div style={{ marginTop: '50px' }}>
-        <h3>📋 Datos Recibidos (Últimos 5 registros de Ventas)</h3>
-        <div style={{ overflowX: 'auto', background: '#2a2a2a', padding: '20px', borderRadius: '10px' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', color: '#ccc' }}>
-            <thead>
-              <tr style={{ borderBottom: '1px solid #555', textAlign:'left' }}>
-                {data.ventas_tabla.length > 0 && Object.keys(data.ventas_tabla[0]).map(k => (
-                  <th key={k} style={{ padding: 10 }}>{k}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {data.ventas_tabla.slice(0, 5).map((row, i) => (
-                <tr key={i} style={{ borderBottom: '1px solid #444' }}>
-                  {Object.values(row).map((val, j) => (
-                    <td key={j} style={{ padding: 10 }}>{val}</td>
-                  ))}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <h3>📋 Registros de Ventas</h3>
+        <TablaGenerica datos={data.ventas_tabla} />
       </div>
+
+      {/* 5. LA NUEVA TABLA QUE FALTABA */}
+      <div style={{ marginTop: '50px', marginBottom: '100px' }}>
+        <h3 style={{ color: '#3498db' }}>📂 Datos Adicionales (Nueva Integración)</h3>
+        {data.extra_tabla && data.extra_tabla.length > 0 ? (
+          <TablaGenerica datos={data.extra_tabla} />
+        ) : (
+          <p style={{ color: '#666', fontStyle: 'italic' }}>
+            Esperando datos... (Verifica el link en el backend si esto no cambia)
+          </p>
+        )}
+      </div>
+
     </div>
   );
 }
+
+// Componente para Tablas
+const TablaGenerica = ({ datos }) => {
+  if (!datos || datos.length === 0) return <p>Sin datos.</p>;
+  // Tomamos las columnas del primer objeto
+  const columnas = Object.keys(datos[0]);
+
+  return (
+    <div style={{ overflowX: 'auto', background: '#2a2a2a', padding: '20px', borderRadius: '10px' }}>
+      <table style={{ width: '100%', borderCollapse: 'collapse', color: '#ccc', minWidth: '600px' }}>
+        <thead>
+          <tr style={{ borderBottom: '1px solid #555', textAlign:'left' }}>
+            {columnas.map(k => (
+              <th key={k} style={{ padding: 10, color: '#fff' }}>{k}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {datos.slice(0, 10).map((row, i) => (
+            <tr key={i} style={{ borderBottom: '1px solid #444' }}>
+              {columnas.map((col, j) => (
+                <td key={j} style={{ padding: 10 }}>{row[col]}</td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {datos.length > 10 && <p style={{marginTop: 10, fontSize: '0.8em'}}>... mostrando 10 de {datos.length} filas.</p>}
+    </div>
+  );
+};
 
 export default App;
