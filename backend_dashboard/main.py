@@ -22,13 +22,16 @@ app.add_middleware(
 # --- CONFIGURACIÓN IA ---
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 model = None
+modelo_activo = "Ninguno"
 
 def configurar_modelo():
+    global modelo_activo
     if not GEMINI_API_KEY:
         print("⚠️ Sin API Key")
         return None
 
     genai.configure(api_key=GEMINI_API_KEY)
+    
     safety = {
         HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_ONLY_HIGH,
         HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_ONLY_HIGH,
@@ -36,12 +39,34 @@ def configurar_modelo():
         HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_ONLY_HIGH,
     }
 
-    try:
-        # Intentamos Flash primero (rápido y bueno para contexto largo)
-        return genai.GenerativeModel('gemini-1.5-flash', safety_settings=safety)
-    except:
-        # Fallback a Pro
-        return genai.GenerativeModel('gemini-pro', safety_settings=safety)
+    # Lista de candidatos en orden de prioridad
+    candidatos = [
+        'gemini-1.5-flash',
+        'gemini-1.5-pro',
+        'gemini-1.0-pro',
+        'gemini-pro'
+    ]
+
+    print("🔄 Iniciando prueba de modelos...")
+
+    for nombre in candidatos:
+        try:
+            print(f"🧪 Probando: {nombre}...")
+            m = genai.GenerativeModel(nombre, safety_settings=safety)
+            
+            # --- LA CLAVE: PRUEBA DE VIDA ---
+            # Intentamos generar algo real. Si esto falla (404), saltará al 'except'
+            m.generate_content("Test de conexion") 
+            
+            print(f"✅ ¡CONECTADO! Modelo confirmado: {nombre}")
+            modelo_activo = nombre
+            return m
+        except Exception as e:
+            print(f"❌ Falló {nombre}: {e}")
+            continue # Pasa al siguiente candidato
+            
+    print("💀 FATAL: Ningún modelo funcionó.")
+    return None
 
 model = configurar_modelo()
 
@@ -90,7 +115,7 @@ def cargar_csv(url):
 
 @app.get("/")
 def home():
-    return {"status": "online", "mensaje": "Backend V21 - Full Power"}
+    return {"status": "online", "mensaje": f"Backend V22 - Modelo Activo: {modelo_activo}"}
 
 @app.get("/api/dashboard")
 def get_dashboard_data():
@@ -138,9 +163,10 @@ async def chat_con_datos(
 ):
     global model
     if not model:
+        # Reintentamos configuración si falló al inicio
         model = configurar_modelo()
         if not model:
-            return {"respuesta": "❌ Error IA: No disponible."}
+            return {"respuesta": f"❌ Error Fatal: Ningún modelo de IA funcionó. ({modelo_activo})"}
 
     # 1. Cargar Datos Internos
     df_ventas = cargar_csv(URL_VENTAS)
@@ -162,6 +188,8 @@ async def chat_con_datos(
     info_web = buscar_en_web(pregunta)
 
     # 4. Armar el Prompt Maestro
+    # Nota: Usamos .tail(50) para evitar sobrecargar modelos antiguos como gemini-pro
+    # si Flash falla.
     contexto = f"""Eres un asistente experto del MinCYT.
     
     FUENTES DE INFORMACIÓN:
@@ -174,7 +202,7 @@ async def chat_con_datos(
     -- Extra: {df_extra.to_csv(index=False) if df_extra is not None else 'N/A'}
     
     C. DOCUMENTO ADJUNTO (PDF):
-    {texto_pdf[:30000] if texto_pdf else 'Ninguno'}
+    {texto_pdf[:20000] if texto_pdf else 'Ninguno'}
     
     PREGUNTA DEL USUARIO: {pregunta}
     
@@ -187,4 +215,5 @@ async def chat_con_datos(
         response = model.generate_content(contexto)
         return {"respuesta": response.text}
     except Exception as e:
-        return {"respuesta": f"Error: {e}"}
+        # Si falla el modelo activo (ej: por tamaño de contexto), intentamos reconfigurar
+        return {"respuesta": f"Error ({modelo_activo}): {e}"}
