@@ -21,20 +21,25 @@ app.add_middleware(
 # --- CONFIGURACIÓN DE LA IA ROBUSTA ---
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 model = None
+last_error_log = "" # Variable para guardar el chisme del error
 
 def configurar_modelo():
+    global last_error_log
     if not GEMINI_API_KEY:
-        print("⚠️ ADVERTENCIA: No se encontró la variable GEMINI_API_KEY")
+        last_error_log = "Variable GEMINI_API_KEY no encontrada en Render."
+        print(f"⚠️ {last_error_log}")
         return None
 
     genai.configure(api_key=GEMINI_API_KEY)
     
-    # Lista de candidatos en orden de preferencia (Del más nuevo al más viejo)
+    # Lista ampliada de candidatos (con y sin prefijo 'models/')
     candidates = [
         "gemini-1.5-flash",
         "gemini-1.5-pro",
         "gemini-1.0-pro",
-        "gemini-pro"
+        "gemini-pro",
+        "models/gemini-1.5-flash",
+        "models/gemini-pro"
     ]
 
     safety_settings = {
@@ -44,35 +49,37 @@ def configurar_modelo():
         HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_ONLY_HIGH,
     }
 
-    tools_config = [{"google_search": {}}] # Configuración para Deep Research
+    tools_config = [{"google_search": {}}] 
 
     print("🔄 Iniciando protocolo de selección de modelo IA...")
+    error_accumulado = []
 
     for model_name in candidates:
         try:
             print(f"🧪 Probando modelo: {model_name}...")
-            
-            # INTENTO A: Con Herramientas (Búsqueda Web)
+            # INTENTO A: Con Herramientas
             try:
                 m = genai.GenerativeModel(model_name, tools=tools_config, safety_settings=safety_settings)
-                # Prueba de fuego: generamos un token para ver si responde sin error
                 m.generate_content("test") 
-                print(f"✅ ÉXITO TOTAL: {model_name} conectado CON Búsqueda Web.")
+                print(f"✅ ÉXITO TOTAL: {model_name}")
                 return m
             except Exception as e_tools:
-                print(f"   ↳ Falló carga con herramientas ({e_tools}). Probando modo estándar...")
+                error_accumulado.append(f"{model_name} (Tools): {str(e_tools)}")
 
-            # INTENTO B: Modo Estándar (Sin búsqueda, solo cerebro)
+            # INTENTO B: Modo Estándar
             m = genai.GenerativeModel(model_name, safety_settings=safety_settings)
             m.generate_content("test")
-            print(f"✅ ÉXITO PARCIAL: {model_name} conectado (Modo Estándar - Sin Web).")
+            print(f"✅ ÉXITO PARCIAL: {model_name}")
             return m
 
         except Exception as e:
-            print(f"❌ Falló {model_name}: {e}")
-            continue # Pasamos al siguiente candidato
+            error_str = f"{model_name} (Std): {str(e)}"
+            print(f"❌ {error_str}")
+            error_accumulado.append(error_str)
+            continue
     
-    print("💀 FATAL: Ningún modelo respondió.")
+    last_error_log = " | ".join(error_accumulado)
+    print(f"💀 FATAL: {last_error_log}")
     return None
 
 # Inicializamos el modelo
@@ -105,7 +112,7 @@ def cargar_csv(url):
 
 @app.get("/")
 def home():
-    return {"status": "online", "mensaje": "Backend V9.0 - IA Self-Healing"}
+    return {"status": "online", "mensaje": "Backend V9.1 - Debugging Mode"}
 
 @app.get("/api/dashboard")
 def get_dashboard_data():
@@ -156,7 +163,9 @@ async def chat_con_datos(
     if not model:
         model = configurar_modelo()
         if not model:
-            return {"respuesta": "❌ Error Crítico: No se pudo conectar con ningún modelo de Google AI."}
+            # AQUÍ ESTÁ EL CAMBIO: Devolvemos el detalle del error para que el usuario lo vea
+            msg_error = f"❌ Error Crítico de Conexión IA. Detalles técnicos: {last_error_log[:500]}..." 
+            return {"respuesta": msg_error}
 
     df_ventas = cargar_csv(URL_VENTAS)
     df_bitacora = cargar_csv(URL_BITACORA)
