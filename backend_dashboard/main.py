@@ -20,8 +20,10 @@ app.add_middleware(
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 model = None
+model_name_used = "Ninguno" # Para saber cuál ganó
 
 def configurar_modelo():
+    global model_name_used
     if not GEMINI_API_KEY:
         print("⚠️ Sin API Key")
         return None
@@ -35,13 +37,36 @@ def configurar_modelo():
         HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_ONLY_HIGH,
     }
 
-    # Intentamos DIRECTAMENTE con gemini-1.5-flash que es el actual estándar gratuito
-    try:
-        m = genai.GenerativeModel('gemini-1.5-flash', safety_settings=safety)
-        return m
-    except Exception as e:
-        print(f"Error al cargar gemini-1.5-flash: {e}")
-        return None
+    # LISTA DE CANDIDATOS (El código probará uno por uno)
+    # Si tu llave es vieja, 'gemini-pro' funcionará.
+    # Si tu llave es nueva, 'gemini-1.5-flash' funcionará.
+    candidatos = [
+        'gemini-1.5-flash',
+        'gemini-1.5-pro',
+        'gemini-1.0-pro',
+        'gemini-pro',
+        'models/gemini-1.5-flash',
+        'models/gemini-pro'
+    ]
+
+    print("🔄 Iniciando protocolo de conexión IA...")
+
+    for nombre in candidatos:
+        try:
+            print(f"🧪 Probando: {nombre}...")
+            m = genai.GenerativeModel(nombre, safety_settings=safety)
+            # Prueba de vida: Le pedimos que diga "Hola"
+            m.generate_content("Test de conexion")
+            
+            print(f"✅ ¡CONECTADO! Modelo activo: {nombre}")
+            model_name_used = nombre
+            return m
+        except Exception as e:
+            print(f"❌ Falló {nombre}. Pasando al siguiente...")
+            continue
+    
+    print("💀 FATAL: Ningún modelo aceptó la API Key.")
+    return None
 
 model = configurar_modelo()
 
@@ -70,7 +95,8 @@ def cargar_csv(url):
 
 @app.get("/")
 def home():
-    return {"status": "online", "mensaje": "Backend V17 - Gemini 1.5 Flash"}
+    # Ahora el mensaje de inicio te dirá qué modelo ganó
+    return {"status": "online", "mensaje": f"Backend V18 - Modelo Activo: {model_name_used}"}
 
 @app.get("/api/dashboard")
 def get_dashboard_data():
@@ -117,10 +143,11 @@ async def chat_con_datos(
     file: UploadFile = File(None)
 ):
     global model
+    # Reintento de conexión si falló al inicio
     if not model:
         model = configurar_modelo()
         if not model:
-            return {"respuesta": "❌ Error IA: Problema de conexión con Gemini 1.5 Flash."}
+            return {"respuesta": "❌ Error Fatal: Tu API Key no funciona con ningún modelo conocido (Flash ni Pro)."}
 
     df_ventas = cargar_csv(URL_VENTAS)
     df_extra = cargar_csv(URL_NUEVA)
