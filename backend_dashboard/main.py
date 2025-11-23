@@ -7,6 +7,7 @@ import google.generativeai as genai
 from google.generativeai.types import HarmCategory, HarmBlockThreshold
 import os
 import pypdf
+from duckduckgo_search import DDGS 
 
 app = FastAPI()
 
@@ -18,18 +19,16 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# --- CONFIGURACIÓN IA ---
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 model = None
-active_model_name = "Ninguno"
 
 def configurar_modelo():
-    global active_model_name
     if not GEMINI_API_KEY:
         print("⚠️ Sin API Key")
         return None
 
     genai.configure(api_key=GEMINI_API_KEY)
-    
     safety = {
         HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_ONLY_HIGH,
         HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_ONLY_HIGH,
@@ -37,57 +36,41 @@ def configurar_modelo():
         HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_ONLY_HIGH,
     }
 
-    # LISTA MAESTRA DE CANDIDATOS
-    # Probamos desde lo más nuevo hasta lo más viejo/experimental
-    candidatos = [
-        'gemini-1.5-flash',
-        'gemini-1.5-flash-latest',
-        'gemini-1.5-pro',
-        'gemini-1.5-pro-latest',
-        'gemini-1.0-pro',
-        'gemini-pro',
-        'models/gemini-1.5-flash',
-        'models/gemini-pro',
-        'gemini-pro-vision' # A veces este acepta texto también
-    ]
-
-    print("🔄 Iniciando escaneo de modelos...")
-
-    # INTENTO 1: Listar lo que Google dice que tenemos
     try:
-        available = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-        print(f"📋 Google dice que tienes: {available}")
-        # Si la lista no está vacía, probamos esos primero
-        candidatos = available + candidatos 
-    except Exception as e:
-        print(f"⚠️ No se pudo listar modelos: {e}")
-
-    # INTENTO 2: Probar uno por uno
-    for nombre in candidatos:
-        # Limpiamos el nombre por si viene con 'models/' duplicado
-        clean_name = nombre if not nombre.startswith('models/') else nombre
-        
-        try:
-            print(f"🧪 Probando: {clean_name}")
-            m = genai.GenerativeModel(clean_name, safety_settings=safety)
-            m.generate_content("Test")
-            print(f"✅ ¡CONECTADO! Ganador: {clean_name}")
-            active_model_name = clean_name
-            return m
-        except Exception as e:
-            print(f"❌ Falló {clean_name}: {e}")
-            continue
-            
-    return None
+        # Intentamos Flash primero (rápido y bueno para contexto largo)
+        return genai.GenerativeModel('gemini-1.5-flash', safety_settings=safety)
+    except:
+        # Fallback a Pro
+        return genai.GenerativeModel('gemini-pro', safety_settings=safety)
 
 model = configurar_modelo()
 
-# --- ENLACES ---
+# --- BÚSQUEDA WEB MANUAL (DuckDuckGo) ---
+def buscar_en_web(consulta, max_results=3):
+    try:
+        print(f"🌍 Buscando en internet: {consulta}")
+        with DDGS() as ddgs:
+            results = list(ddgs.text(consulta, max_results=max_results))
+            
+        if not results:
+            return "No se encontraron resultados relevantes en la web."
+            
+        texto_busqueda = ""
+        for i, r in enumerate(results):
+            texto_busqueda += f"RESULTADO {i+1}:\nTitulo: {r['title']}\nResumen: {r['body']}\nFuente: {r['href']}\n\n"
+            
+        return texto_busqueda
+    except Exception as e:
+        print(f"⚠️ Error en búsqueda web: {e}")
+        return "No se pudo realizar la búsqueda web en este momento."
+
+# --- TUS ENLACES ---
 URL_BITACORA = "https://docs.google.com/spreadsheets/d/e/2PACX-1vR0-Uk3fi9iIO1XHja2j3nFlcy4NofCDsjzPh69-4D1jJkDUwq7E5qY1S201_e_0ODIk5WksS_ezYHi/pub?gid=643804140&single=true&output=csv"
 URL_VENTAS = "https://docs.google.com/spreadsheets/d/e/2PACX-1vR0-Uk3fi9iIO1XHja2j3nFlcy4NofCDsjzPh69-4D1jJkDUwq7E5qY1S201_e_0ODIk5WksS_ezYHi/pub?gid=0&single=true&output=csv"
 URL_NUEVA = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQiN48tufdUP4BDXv7cVrh80OI8Li2KqjXQ-4LalIFCJ9ZnMYHr3R4PvSrPDUsk_g/pub?output=csv"
 URL_CALENDARIO = "TU_LINK_CALENDARIO_AQUI" 
 
+# --- HERRAMIENTAS ---
 def limpiar_dinero(valor):
     if pd.isna(valor): return 0.0
     s = str(valor).replace("$", "").replace(" ", "").strip()
@@ -107,11 +90,11 @@ def cargar_csv(url):
 
 @app.get("/")
 def home():
-    return {"status": "online", "modelo_ia": active_model_name}
+    return {"status": "online", "mensaje": "Backend V21 - Full Power"}
 
 @app.get("/api/dashboard")
 def get_dashboard_data():
-    # (Lógica intacta)
+    # (Lógica Dashboard igual)
     df_bitacora = cargar_csv(URL_BITACORA)
     datos_bitacora = df_bitacora.to_dict(orient="records") if df_bitacora is not None else []
 
@@ -155,15 +138,15 @@ async def chat_con_datos(
 ):
     global model
     if not model:
-        # Ultimo intento al vuelo
         model = configurar_modelo()
         if not model:
-            return {"respuesta": "❌ Error: Ningún modelo de IA compatible encontrado."}
+            return {"respuesta": "❌ Error IA: No disponible."}
 
+    # 1. Cargar Datos Internos
     df_ventas = cargar_csv(URL_VENTAS)
     df_extra = cargar_csv(URL_NUEVA)
-    df_bitacora = cargar_csv(URL_BITACORA)
     
+    # 2. Cargar PDF (Si hay)
     texto_pdf = ""
     if file:
         try:
@@ -175,22 +158,33 @@ async def chat_con_datos(
         except Exception as e:
             texto_pdf = f"Error PDF: {e}"
 
-    contexto = f"""Eres un asistente del MinCYT.
+    # 3. BÚSQUEDA WEB AUTOMÁTICA
+    info_web = buscar_en_web(pregunta)
+
+    # 4. Armar el Prompt Maestro
+    contexto = f"""Eres un asistente experto del MinCYT.
     
-    DATOS:
-    1. VENTAS:
-    {df_ventas.tail(50).to_csv(index=False) if df_ventas is not None else 'N/A'}
+    FUENTES DE INFORMACIÓN:
     
-    2. EXTRA:
-    {df_extra.to_csv(index=False) if df_extra is not None else 'N/A'}
+    A. BÚSQUEDA WEB RECIENTE (Para actualidad):
+    {info_web}
     
-    3. PDF:
-    {texto_pdf[:10000] if texto_pdf else 'Ninguno'}
+    B. DATOS INTERNOS (CSV):
+    -- Ventas: {df_ventas.tail(50).to_csv(index=False) if df_ventas is not None else 'N/A'}
+    -- Extra: {df_extra.to_csv(index=False) if df_extra is not None else 'N/A'}
     
-    PREGUNTA: {pregunta}"""
+    C. DOCUMENTO ADJUNTO (PDF):
+    {texto_pdf[:30000] if texto_pdf else 'Ninguno'}
+    
+    PREGUNTA DEL USUARIO: {pregunta}
+    
+    INSTRUCCIONES:
+    - Usa la 'BÚSQUEDA WEB' si te preguntan sobre hechos actuales (dólar, clima, noticias) o datos que no están en los archivos.
+    - Usa los 'DATOS INTERNOS' para preguntas sobre gestión, proyectos o presupuesto.
+    """
 
     try:
         response = model.generate_content(contexto)
         return {"respuesta": response.text}
     except Exception as e:
-        return {"respuesta": f"Error IA: {e}"}
+        return {"respuesta": f"Error: {e}"}
