@@ -50,47 +50,46 @@ if GEMINI_API_KEY:
     try: model = genai.GenerativeModel('gemini-1.5-flash', safety_settings=safety)
     except: pass
 
-# --- LÓGICA DE LIMPIEZA ROBUSTA 🪄 ---
+# --- LÓGICA DE LIMPIEZA ROBUSTA (VERSION ACTUALIZADA) 🪄 ---
 def normalizar_dataframe(df, tabla_destino):
     """
-    Traduce las columnas del CSV a las columnas exactas de Supabase.
+    Traduce las columnas del Excel a las columnas exactas de Supabase.
     """
-    # 1. Limpieza básica de cabeceras
+    # 1. Limpieza básica de cabeceras (minusculas y sin espacios extra)
     df.columns = [c.lower().strip() for c in df.columns]
     
-    # 2. Diccionario de Traducción (CSV -> Supabase)
-    # Aquí definimos sinónimos comunes para que no falle si cambia el Excel.
+    # 2. DICCIONARIO DE TRADUCCIÓN (Aquí agregamos tus columnas nuevas)
     traducciones = {
-        # VENTAS
-        "nombre": "proyecto", "nombre proyecto": "proyecto", "proyecto": "proyecto",
-        "monto": "monto", "inversion": "monto", "presupuesto": "monto",
-        "responsable": "responsable", "lead": "responsable",
-        "estado": "estado", "status": "estado",
-        "fecha": "fecha",
+        # VENTAS (Mantenemos las anteriores por si acaso)
+        "nombre": "proyecto", "proyecto": "proyecto",
+        "monto": "monto", "inversion": "monto",
+        "responsable": "responsable", "estado": "estado",
         
         # BITACORA
         "tarea": "tarea", "actividad": "tarea",
-        "tipo": "tipo", "categoria": "tipo",
-        "duracion": "duracion", "duración": "duracion", "horas": "duracion", "duración (hs)": "duracion", "duracion (hs)": "duracion",
+        "tipo": "tipo", "duración (hs)": "duracion", "duracion": "duracion",
         
-        # CALENDARIO
-        "evento": "evento", "nombre evento": "evento",
-        "pais": "pais", "país": "pais", "lugar": "pais",
-        "importancia": "importancia", "prioridad": "importancia"
+        # --- CALENDARIO (ACTUALIZADO SEGÚN TU IMAGEN) ---
+        "título": "evento", "titulo": "evento",  # Tu Excel dice 'Título' -> DB 'evento'
+        "fecha inicio": "fecha",                 # Tu Excel dice 'Fecha inicio' -> DB 'fecha'
+        "lugar": "pais",                         # Tu Excel dice 'Lugar' -> DB 'pais'
+        "nac/intl": "importancia",               # Usamos 'Nac/Intl' para llenar 'importancia'
+        "organizador": "descripcion"             # (Opcional) Si tuvieras campo descripcion
     }
     
-    # Renombrar columnas usando el diccionario
+    # Renombrar columnas
     df.rename(columns=traducciones, inplace=True)
     
-    # 3. Filtrar solo las columnas que existen en nuestra DB para evitar errores
-    columnas_permitidas = ["fecha", "proyecto", "monto", "estado", "responsable", "tarea", "tipo", "duracion", "evento", "pais", "importancia"]
-    df = df[[c for c in df.columns if c in columnas_permitidas]]
+    # 3. Filtrar solo columnas válidas para Supabase
+    columnas_validas = ["fecha", "proyecto", "monto", "estado", "responsable", "tarea", "tipo", "duracion", "evento", "pais", "importancia"]
+    df = df[[c for c in df.columns if c in columnas_validas]]
     
-    # 4. Limpieza de datos nulos y fechas
+    # 4. Limpieza de datos
     df = df.replace({np.nan: None})
+    
+    # Forzar formato de fecha día primero (DD/MM/YYYY)
     if 'fecha' in df.columns:
-        # Forzamos formato fecha estándar YYYY-MM-DD
-        df['fecha'] = pd.to_datetime(df['fecha'], errors='coerce').dt.strftime('%Y-%m-%d')
+        df['fecha'] = pd.to_datetime(df['fecha'], dayfirst=True, errors='coerce').dt.strftime('%Y-%m-%d')
         
     return df
 
@@ -105,18 +104,19 @@ def sincronizar_sheets():
             
             # 1. Leer
             r = requests.get(url)
+            r.encoding = 'utf-8' # Forzar UTF-8 para acentos
             df = pd.read_csv(io.BytesIO(r.content))
             
-            # 2. Normalizar (Aquí está la mejora)
+            # 2. Normalizar
             df_limpio = normalizar_dataframe(df, tabla)
             
             if df_limpio.empty:
-                log.append(f"⚠️ {tabla}: CSV vacío o columnas no reconocidas.")
+                log.append(f"⚠️ {tabla}: Sin columnas coincidentes.")
                 continue
 
             datos_dict = df_limpio.to_dict(orient='records')
             
-            # 3. Escribir
+            # 3. Escribir (Borrón y Cuenta Nueva)
             supabase.table(tabla).delete().neq("id", 0).execute() 
             if datos_dict:
                 supabase.table(tabla).insert(datos_dict).execute()
@@ -129,7 +129,7 @@ def sincronizar_sheets():
 
     return {"status": "ok", "detalles": log}
 
-# --- RESTO DE ENDPOINTS (Iguales) ---
+# --- RESTO DE ENDPOINTS ---
 def get_tabla(nombre):
     if not supabase: return []
     try: return supabase.table(nombre).select("*").limit(100).execute().data
@@ -140,7 +140,8 @@ def get_dashboard():
     return {
         "bitacora": get_tabla("bitacora"),
         "ventas_tabla": get_tabla("ventas"),
-        "extra_tabla": get_tabla("calendario")
+        "extra_tabla": get_tabla("calendario"),
+        "tendencia_grafico": []
     }
 
 @app.post("/api/chat")
@@ -148,12 +149,11 @@ async def chat(pregunta: str = Form(...), file: UploadFile = File(None)):
     if not model: return {"respuesta": "Error IA"}
     
     ctx_dash = ""
-    # Intentamos traer datos para el chat
     try:
         v = get_tabla("ventas")
         c = get_tabla("calendario")
-        if v: ctx_dash += f"\nVENTAS:\n{tabulate(v, headers='keys')}\n"
         if c: ctx_dash += f"\nCALENDARIO:\n{tabulate(c, headers='keys')}\n"
+        if v: ctx_dash += f"\nVENTAS:\n{tabulate(v, headers='keys')}\n"
     except: pass
 
     txt_web = ""
@@ -165,7 +165,7 @@ async def chat(pregunta: str = Form(...), file: UploadFile = File(None)):
         except: pass
 
     prompt = f"""Asistente MinCYT.
-    DATOS: {ctx_dash}
+    DATOS INTERNOS: {ctx_dash}
     WEB: {txt_web}
     PREGUNTA: {pregunta}"""
     
