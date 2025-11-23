@@ -21,51 +21,57 @@ app.add_middleware(
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 model = None
-debug_log = [] # Guardamos el historial de intentos
+modelo_nombre_final = "Ninguno"
 
 def configurar_modelo():
-    global debug_log
-    debug_log = [] # Reset log
-    
+    global modelo_nombre_final
     if not GEMINI_API_KEY:
-        debug_log.append("⚠️ API Key no encontrada en variables de entorno.")
+        print("⚠️ Sin API Key")
         return None
 
     genai.configure(api_key=GEMINI_API_KEY)
     
-    # Lista extendida con todas las variantes posibles de nombres
-    candidatos = [
-        'gemini-1.5-flash',
-        'models/gemini-1.5-flash',
-        'gemini-1.5-pro',
-        'models/gemini-1.5-pro',
-        'gemini-1.0-pro',
-        'models/gemini-1.0-pro',
-        'gemini-pro',
-        'models/gemini-pro'
-    ]
+    safety = {
+        HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_ONLY_HIGH,
+        HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_ONLY_HIGH,
+        HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_ONLY_HIGH,
+        HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_ONLY_HIGH,
+    }
 
-    print("🔄 Iniciando prueba exhaustiva V23...")
+    try:
+        print("🔍 Preguntando a Google qué modelos tienes disponibles...")
+        # PASO 1: Obtener la lista EXACTA de Google
+        listado_modelos = list(genai.list_models())
+        
+        # Filtramos los que sirven para generar texto
+        modelos_validos = [m.name for m in listado_modelos if 'generateContent' in m.supported_generation_methods]
+        
+        print(f"📋 Tu cuenta tiene acceso a: {modelos_validos}")
+        
+        if not modelos_validos:
+            return None
 
-    for nombre in candidatos:
-        try:
-            print(f"🧪 Probando: {nombre}")
-            # Configuramos sin safety settings estrictos para evitar bloqueos falsos en el test
-            m = genai.GenerativeModel(nombre)
-            m.generate_content("Test")
-            print(f"✅ ¡CONECTADO! {nombre}")
-            return m
-        except Exception as e:
-            error_msg = f"❌ {nombre}: {str(e)}"
-            print(error_msg)
-            debug_log.append(error_msg)
-            continue
-            
-    return None
+        # PASO 2: Elegir el mejor de la lista REAL
+        # Buscamos preferentemente 'flash' o '1.5'
+        elegido = next((m for m in modelos_validos if 'flash' in m), None)
+        if not elegido:
+            elegido = next((m for m in modelos_validos if '1.5' in m), None)
+        if not elegido:
+            elegido = modelos_validos[0] # El primero que haya
+
+        print(f"🚀 Usando modelo real: {elegido}")
+        modelo_nombre_final = elegido
+        
+        return genai.GenerativeModel(elegido, safety_settings=safety)
+
+    except Exception as e:
+        print(f"❌ Error al listar modelos: {e}")
+        # Fallback desesperado
+        return genai.GenerativeModel('gemini-1.5-flash', safety_settings=safety)
 
 model = configurar_modelo()
 
-# --- BÚSQUEDA WEB MANUAL ---
+# --- BÚSQUEDA WEB ---
 def buscar_en_web(consulta, max_results=3):
     try:
         with DDGS() as ddgs:
@@ -76,7 +82,7 @@ def buscar_en_web(consulta, max_results=3):
             texto += f"WEB {i+1}: {r['title']} - {r['body']}\n"
         return texto
     except:
-        return "Error en búsqueda web."
+        return "No se pudo buscar en web."
 
 # --- ENLACES ---
 URL_BITACORA = "https://docs.google.com/spreadsheets/d/e/2PACX-1vR0-Uk3fi9iIO1XHja2j3nFlcy4NofCDsjzPh69-4D1jJkDUwq7E5qY1S201_e_0ODIk5WksS_ezYHi/pub?gid=643804140&single=true&output=csv"
@@ -96,20 +102,21 @@ def cargar_csv(url):
 
 @app.get("/")
 def home():
-    estado = "✅ Conectado" if model else "❌ Desconectado"
-    return {"status": "online", "ia_status": estado}
+    return {"status": "online", "modelo": modelo_nombre_final}
 
 @app.get("/api/dashboard")
 def get_dashboard_data():
-    # (Lógica Dashboard igual)
+    # (Lógica igual)
     df_bitacora = cargar_csv(URL_BITACORA)
     datos_bitacora = df_bitacora.to_dict(orient="records") if df_bitacora is not None else []
     df_ventas = cargar_csv(URL_VENTAS)
     datos_ventas_crudos = df_ventas.to_dict(orient="records") if df_ventas is not None else []
+    # ... lógica de tendencia simplificada para brevedad ...
     datos_tendencia = []
     if df_ventas is not None:
-        # ... (Lógica de tendencia igual)
-        pass # Simplificado aquí para brevedad, mantener lógica original si se usa
+        # ... (tu lógica original de pandas aquí) ...
+        pass 
+    
     df_nueva = cargar_csv(URL_NUEVA)
     datos_nueva_tabla = df_nueva.to_dict(orient="records") if df_nueva is not None else []
     df_cal = cargar_csv(URL_CALENDARIO)
@@ -117,7 +124,7 @@ def get_dashboard_data():
 
     return {
         "bitacora": datos_bitacora, "ventas_tabla": datos_ventas_crudos,
-        "tendencia_grafico": [], "extra_tabla": datos_nueva_tabla, "calendario": datos_calendario
+        "tendencia_grafico": datos_tendencia, "extra_tabla": datos_nueva_tabla, "calendario": datos_calendario
     }
 
 @app.post("/api/chat")
@@ -126,9 +133,7 @@ async def chat_con_datos(pregunta: str = Form(...), file: UploadFile = File(None
     if not model:
         model = configurar_modelo()
         if not model:
-            # AQUÍ ESTÁ LA CLAVE: Devolvemos el log de errores al usuario
-            errores_str = "\n".join(debug_log[-3:]) # Mostramos los últimos 3 errores
-            return {"respuesta": f"🛑 DIAGNÓSTICO DE ERROR:\nLa IA no pudo conectar. Aquí están los motivos técnicos:\n\n{errores_str}\n\nPor favor, verifica tu API Key."}
+            return {"respuesta": "❌ Error: No se pudo encontrar un modelo válido en tu cuenta."}
 
     df_ventas = cargar_csv(URL_VENTAS)
     df_extra = cargar_csv(URL_NUEVA)
@@ -143,16 +148,23 @@ async def chat_con_datos(pregunta: str = Form(...), file: UploadFile = File(None
 
     info_web = buscar_en_web(pregunta)
 
+    # Contexto sin límites (.head) para que lea todo
     contexto = f"""Eres un asistente experto.
-    WEB: {info_web}
-    DATOS:
-    - Ventas: {df_ventas.tail(50).to_csv(index=False) if df_ventas is not None else 'N/A'}
-    - Extra: {df_extra.to_csv(index=False) if df_extra is not None else 'N/A'}
-    - PDF: {texto_pdf[:20000]}
-    Pregunta: {pregunta}"""
+    
+    1. BÚSQUEDA WEB (Actualidad):
+    {info_web}
+    
+    2. DATOS INTERNOS (CSV):
+    -- Ventas: {df_ventas.to_csv(index=False) if df_ventas is not None else 'N/A'}
+    -- Extra: {df_extra.to_csv(index=False) if df_extra is not None else 'N/A'}
+    
+    3. PDF ADJUNTO:
+    {texto_pdf[:30000]}
+    
+    PREGUNTA: {pregunta}"""
 
     try:
         response = model.generate_content(contexto)
         return {"respuesta": response.text}
     except Exception as e:
-        return {"respuesta": f"Error generando respuesta: {e}"}
+        return {"respuesta": f"Error IA ({modelo_nombre_final}): {e}"}
