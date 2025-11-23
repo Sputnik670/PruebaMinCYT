@@ -18,16 +18,16 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- CONFIGURACIÓN DE LA IA DINÁMICA ---
+# --- CONFIGURACIÓN DE LA IA ---
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 model = None
-last_config_log = ""
+last_error = ""
 
 def configurar_modelo():
-    global last_config_log
+    global last_error
     if not GEMINI_API_KEY:
-        last_config_log = "No se encontró la variable GEMINI_API_KEY."
-        print(f"⚠️ {last_config_log}")
+        last_error = "Falta API Key en variables de entorno."
+        print(f"⚠️ {last_error}")
         return None
 
     genai.configure(api_key=GEMINI_API_KEY)
@@ -39,47 +39,28 @@ def configurar_modelo():
         HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_ONLY_HIGH,
     }
 
-    try:
-        print("🔍 Consultando a Google los modelos disponibles para esta API Key...")
-        # Listamos TODOS los modelos que tu cuenta puede ver
-        all_models = list(genai.list_models())
-        
-        # Filtramos los que sirven para generar texto (chat)
-        chat_models = [m.name for m in all_models if 'generateContent' in m.supported_generation_methods]
-        
-        if not chat_models:
-            last_config_log = "La API Key es válida, pero no tiene acceso a ningún modelo de texto."
-            print(f"❌ {last_config_log}")
-            return None
+    candidatos = [
+        'gemini-1.5-flash',
+        'gemini-1.5-pro',
+        'gemini-1.0-pro',
+        'gemini-pro'
+    ]
 
-        print(f"📋 Modelos encontrados: {chat_models}")
-
-        # Estrategia de Selección:
-        # 1. Buscamos alguno que diga 'flash' (son los más rápidos)
-        selected_name = next((m for m in chat_models if 'flash' in m), None)
-        
-        # 2. Si no, alguno que diga 'pro'
-        if not selected_name:
-            selected_name = next((m for m in chat_models if 'pro' in m), None)
+    print("🔄 Iniciando conexión con IA...")
+    for nombre in candidatos:
+        try:
+            print(f"🧪 Probando modelo: {nombre}")
+            m = genai.GenerativeModel(nombre, safety_settings=safety)
+            m.generate_content("Test")
+            print(f"✅ Conectado exitosamente a: {nombre}")
+            return m
+        except Exception as e:
+            print(f"❌ Falló {nombre}: {e}")
+            last_error = f"Falló {nombre}: {str(e)}"
+            continue
             
-        # 3. Si no, el primero de la lista (cualquiera sirve)
-        if not selected_name:
-            selected_name = chat_models[0]
+    return None
 
-        print(f"🚀 Seleccionado automáticamente: {selected_name}")
-        m = genai.GenerativeModel(selected_name, safety_settings=safety)
-        
-        # Prueba de vida final
-        m.generate_content("Test")
-        last_config_log = f"Conectado exitosamente a {selected_name}"
-        return m
-
-    except Exception as e:
-        last_config_log = f"Error al listar/configurar modelos: {str(e)}"
-        print(f"❌ {last_config_log}")
-        return None
-
-# Inicializamos
 model = configurar_modelo()
 
 # --- TUS ENLACES ---
@@ -108,7 +89,7 @@ def cargar_csv(url):
 
 @app.get("/")
 def home():
-    return {"status": "online", "mensaje": "Backend V12 - Auto Discovery"}
+    return {"status": "online", "mensaje": "Backend V14 - Full Context Mode"}
 
 @app.get("/api/dashboard")
 def get_dashboard_data():
@@ -155,45 +136,50 @@ async def chat_con_datos(
     file: UploadFile = File(None)
 ):
     global model
-    # Reintentar configuración si falló al inicio
     if not model:
         model = configurar_modelo()
         if not model:
-            return {"respuesta": f"❌ Error Fatal de IA: {last_config_log}"}
+            return {"respuesta": f"❌ Error IA: No se pudo conectar. {last_error}"}
 
-    # Carga de datos
     df_ventas = cargar_csv(URL_VENTAS)
     df_extra = cargar_csv(URL_NUEVA)
+    df_bitacora = cargar_csv(URL_BITACORA)
     
     texto_pdf = ""
+    nombre_archivo = ""
     if file:
         try:
+            nombre_archivo = file.filename
             content = await file.read()
             pdf_file = io.BytesIO(content)
             reader = pypdf.PdfReader(pdf_file)
-            for page in reader.pages:
-                texto_pdf += page.extract_text() + "\n"
+            for i, page in enumerate(reader.pages):
+                texto_pdf += f"[Página {i+1}] {page.extract_text()}\n"
         except Exception as e:
-            texto_pdf = f"Error leyendo PDF: {e}"
+            texto_pdf = f"Error PDF: {e}"
 
-    # Contexto
-    contexto = f"""Eres un asistente del MinCYT.
-    DATOS DISPONIBLES:
+    # --- CAMBIO CLAVE: ELIMINAMOS .head(30) PARA QUE LEA TODO ---
+    contexto = f"""Eres un asistente experto del MinCYT. Analiza TODOS los datos provistos.
     
-    1. VENTAS:
-    {df_ventas.head(30).to_csv(index=False) if df_ventas is not None else 'No disponible'}
+    FUENTES DE DATOS COMPLETAS:
     
-    2. DATOS EXTRA:
-    {df_extra.head(30).to_csv(index=False) if df_extra is not None else 'No disponible'}
+    1. VENTAS E INVERSIÓN (CSV):
+    {df_ventas.to_csv(index=False) if df_ventas is not None else 'No disponible'}
     
-    3. DOCUMENTO ADJUNTO:
-    {texto_pdf[:20000] if texto_pdf else 'Ninguno'}
+    2. CALENDARIO Y DATOS EXTRA (CSV):
+    {df_extra.to_csv(index=False) if df_extra is not None else 'No disponible'}
     
-    PREGUNTA: {pregunta}
+    3. BITÁCORA DE HORAS (CSV):
+    {df_bitacora.to_csv(index=False) if df_bitacora is not None else 'No disponible'}
+    
+    4. DOCUMENTO ADJUNTO (PDF):
+    {texto_pdf[:50000] if texto_pdf else 'Ninguno'}
+    
+    PREGUNTA DEL USUARIO: {pregunta}
     RESPUESTA:"""
 
     try:
         response = model.generate_content(contexto)
         return {"respuesta": response.text}
     except Exception as e:
-        return {"respuesta": f"Error generando respuesta: {e}"}
+        return {"respuesta": f"Error IA: {e}"}
