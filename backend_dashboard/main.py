@@ -8,9 +8,10 @@ from google.generativeai.types import HarmCategory, HarmBlockThreshold
 import os
 import pypdf
 from tavily import TavilyClient
-from tabulate import tabulate
+from tabulate import tabulate 
 import sys
 
+# --- INICIALIZACIÓN APP ---
 app = FastAPI()
 
 app.add_middleware(
@@ -21,29 +22,28 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- VARIABLES DE ENTORNO ---
+# --- CONFIGURACIÓN Y VARIABLES ---
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 TAVILY_API_KEY = os.environ.get("TAVILY_API_KEY")
 
-model = None
-tavily_client = None
+# URLs de Google Sheets (Publicados como CSV)
+URLS = {
+    "VENTAS": "https://docs.google.com/spreadsheets/d/e/2PACX-1vR0-Uk3fi9iIO1XHja2j3nFlcy4NofCDsjzPh69-4D1jJkDUwq7E5qY1S201_e_0ODIk5WksS_ezYHi/pub?gid=0&single=true&output=csv",
+    "BITACORA": "https://docs.google.com/spreadsheets/d/e/2PACX-1vR0-Uk3fi9iIO1XHja2j3nFlcy4NofCDsjzPh69-4D1jJkDUwq7E5qY1S201_e_0ODIk5WksS_ezYHi/pub?gid=643804140&single=true&output=csv",
+    "CALENDARIO": "https://docs.google.com/spreadsheets/d/e/2PACX-1vQiN48tufdUP4BDXv7cVrh80OI8Li2KqjXQ-4LalIFCJ9ZnMYHr3R4PvSrPDUsk_g/pub?output=csv"
+}
 
-# --- CONFIGURACIÓN IA (ENFOQUE DINÁMICO) ---
-def configurar_modelo():
-    print(f"📦 VERSIÓN DE PYTHON: {sys.version}")
-    try:
-        print(f"📦 VERSIÓN DE GOOGLE-GENAI: {genai.__version__}")
-    except:
-        print("📦 VERSIÓN DE GOOGLE-GENAI: (No se pudo determinar)")
-
+# --- MÓDULO 1: GESTIÓN DE IA (GEMINI) ---
+def obtener_modelo_gemini():
+    """Configura y devuelve el mejor modelo disponible dinámicamente."""
     if not GEMINI_API_KEY:
-        print("⚠️ Error: Falta GEMINI_API_KEY.")
+        print("⚠️ Error: Falta GEMINI_API_KEY")
         return None
 
     try:
         genai.configure(api_key=GEMINI_API_KEY)
         
-        # Configuración de seguridad
+        # Configuramos seguridad para que no bloquee documentos técnicos
         safety = {
             HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_ONLY_HIGH,
             HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_ONLY_HIGH,
@@ -51,148 +51,164 @@ def configurar_modelo():
             HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_ONLY_HIGH,
         }
 
-        print("🔍 PREGUNTANDO A GOOGLE QUÉ MODELOS TENEMOS DISPONIBLES...")
-        
-        modelo_elegido = None
-        
-        # 1. Listar modelos reales disponibles para tu API Key
-        try:
-            for m in genai.list_models():
-                if 'generateContent' in m.supported_generation_methods:
-                    nombre = m.name
-                    print(f"   - Disponible: {nombre}")
-                    
-                    # Prioridad: Flash > Pro 1.5 > Pro 1.0
-                    if 'flash' in nombre and '1.5' in nombre:
-                        modelo_elegido = nombre
-                    elif 'pro' in nombre and '1.5' in nombre and not modelo_elegido:
-                        modelo_elegido = nombre
-                    elif 'gemini-pro' in nombre and not modelo_elegido:
-                        modelo_elegido = nombre
-        except Exception as e:
-            print(f"⚠️ Error listando modelos (Posible error de API Key o Región): {e}")
+        # Lista de candidatos preferidos
+        candidatos = [
+            'gemini-1.5-flash', 
+            'models/gemini-1.5-flash',
+            'gemini-1.5-pro',
+            'gemini-1.0-pro',
+            'gemini-pro'
+        ]
 
-        # 2. Si no encontramos nada en la lista (raro), probamos el fallback
-        if not modelo_elegido:
-            print("⚠️ No se encontró modelo preferido en la lista. Usando 'gemini-1.5-flash' a ciegas.")
-            modelo_elegido = 'gemini-1.5-flash'
+        # Intentamos conectar con el primero que funcione
+        for nombre in candidatos:
+            try:
+                model = genai.GenerativeModel(nombre, safety_settings=safety)
+                return model
+            except:
+                continue
         
-        print(f"🎯 INTENTANDO CONECTAR CON: {modelo_elegido}")
-        
-        try:
-            m = genai.GenerativeModel(modelo_elegido, safety_settings=safety)
-            response = m.generate_content("Hola")
-            print(f"✅ ¡CONEXIÓN EXITOSA CON {modelo_elegido}!")
-            return m
-        except Exception as e:
-            print(f"❌ Falló la conexión final con {modelo_elegido}: {e}")
-            return None
-
+        print("❌ No se pudo conectar con ningún modelo Gemini conocido.")
+        return None
     except Exception as e:
-        print(f"💀 Error fatal en configuración: {e}")
+        print(f"💀 Error fatal configurando Gemini: {e}")
         return None
 
-model = configurar_modelo()
+# Instancia global del modelo
+model = obtener_modelo_gemini()
 
-# --- TAVILY ---
-if TAVILY_API_KEY:
-    try:
-        tavily_client = TavilyClient(api_key=TAVILY_API_KEY)
-        print("✅ Tavily: ACTIVO")
-    except Exception as e:
-        print(f"❌ Error Tavily: {e}")
-
-def buscar_en_web(consulta):
-    if not tavily_client: return "(Sin búsqueda web - Falta Key)"
-    try:
-        resp = tavily_client.search(query=consulta, search_depth="advanced", max_results=5)
-        txt = "--- RESULTADOS INTERNET ---\n"
-        for r in resp.get('results', []):
-            txt += f"* {r.get('title')}: {r.get('content')} ({r.get('url')})\n\n"
-        return txt
-    except Exception as e: return f"(Error Búsqueda: {e})"
-
-# --- CARGA DE DATOS ---
-URL_BITACORA = "https://docs.google.com/spreadsheets/d/e/2PACX-1vR0-Uk3fi9iIO1XHja2j3nFlcy4NofCDsjzPh69-4D1jJkDUwq7E5qY1S201_e_0ODIk5WksS_ezYHi/pub?gid=643804140&single=true&output=csv"
-URL_VENTAS = "https://docs.google.com/spreadsheets/d/e/2PACX-1vR0-Uk3fi9iIO1XHja2j3nFlcy4NofCDsjzPh69-4D1jJkDUwq7E5qY1S201_e_0ODIk5WksS_ezYHi/pub?gid=0&single=true&output=csv"
-URL_CALENDARIO = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQiN48tufdUP4BDXv7cVrh80OI8Li2KqjXQ-4LalIFCJ9ZnMYHr3R4PvSrPDUsk_g/pub?output=csv"
-
-def cargar_csv(url):
+# --- MÓDULO 2: GESTIÓN DE DATOS (DASHBOARD) ---
+def descargar_csv(url):
+    """Descarga un CSV y devuelve un DataFrame de Pandas."""
     try:
         if not url or "TU_LINK" in url: return None
-        r = requests.get(url, timeout=10)
-        r.raise_for_status()
-        df = pd.read_csv(io.BytesIO(r.content), encoding='utf-8').fillna("")
-        return df
+        response = requests.get(url, timeout=5)
+        response.raise_for_status()
+        return pd.read_csv(io.BytesIO(response.content), encoding='utf-8').fillna("")
     except Exception as e:
-        print(f"⚠️ Error cargando CSV: {e}")
+        print(f"⚠️ Error descargando CSV: {e}")
         return None
+
+def obtener_contexto_dashboard():
+    """Recopila toda la data del dashboard y la formatea como texto Markdown."""
+    texto = ""
+    
+    # 1. Calendario
+    df_cal = descargar_csv(URLS["CALENDARIO"])
+    if df_cal is not None and not df_cal.empty:
+        texto += f"\n### 📅 CALENDARIO Y PROYECTOS:\n{df_cal.to_markdown(index=False)}\n"
+    
+    # 2. Ventas (Últimos 20 registros para no saturar)
+    df_ventas = descargar_csv(URLS["VENTAS"])
+    if df_ventas is not None and not df_ventas.empty:
+        texto += f"\n### 💰 VENTAS RECIENTES:\n{df_ventas.tail(20).to_markdown(index=False)}\n"
+        
+    # 3. Bitácora (Primeros 20 registros)
+    df_bit = descargar_csv(URLS["BITACORA"])
+    if df_bit is not None and not df_bit.empty:
+        texto += f"\n### ⏱️ BITÁCORA DE TAREAS:\n{df_bit.head(20).to_markdown(index=False)}\n"
+        
+    if not texto:
+        texto = "(No hay datos del dashboard disponibles actualmente)"
+        
+    return texto
+
+# --- MÓDULO 3: GESTIÓN DE PDF ---
+async def obtener_contexto_pdf(file: UploadFile):
+    """Lee un archivo PDF y extrae su texto."""
+    if not file: return ""
+    
+    texto = ""
+    try:
+        content = await file.read()
+        pdf_reader = pypdf.PdfReader(io.BytesIO(content))
+        texto += f"\n### 📄 CONTENIDO DEL ARCHIVO ADJUNTO ({file.filename}):\n"
+        # Leemos hasta 10 páginas para no exceder límites
+        for i, page in enumerate(pdf_reader.pages[:10]):
+            texto += page.extract_text() + "\n"
+    except Exception as e:
+        texto += f"\n(Error leyendo el PDF: {e})\n"
+    return texto
+
+# --- MÓDULO 4: GESTIÓN WEB (TAVILY) ---
+def obtener_contexto_web(consulta):
+    """Busca en internet si es necesario."""
+    if not TAVILY_API_KEY: return "(Búsqueda web desactivada)"
+    
+    try:
+        tavily = TavilyClient(api_key=TAVILY_API_KEY)
+        # 'advanced' es mejor para noticias y hechos recientes
+        resp = tavily.search(query=consulta, search_depth="advanced", max_results=4)
+        
+        texto = "\n### 🌍 RESULTADOS DE BÚSQUEDA WEB:\n"
+        for r in resp.get('results', []):
+            texto += f"- **{r.get('title')}**: {r.get('content')} [Fuente: {r.get('url')}]\n"
+        return texto
+    except Exception as e:
+        return f"(Error en búsqueda web: {e})"
+
+# --- ENDPOINTS ---
 
 @app.get("/api/dashboard")
 def get_dashboard_data():
-    df_extra = cargar_csv(URL_CALENDARIO)
+    """Endpoint exclusivo para los gráficos del Frontend."""
+    df_cal = descargar_csv(URLS["CALENDARIO"])
+    df_ventas = descargar_csv(URLS["VENTAS"])
+    df_bit = descargar_csv(URLS["BITACORA"])
+    
     return {
-        "bitacora": cargar_csv(URL_BITACORA).to_dict(orient="records") if cargar_csv(URL_BITACORA) is not None else [],
-        "ventas_tabla": cargar_csv(URL_VENTAS).to_dict(orient="records") if cargar_csv(URL_VENTAS) is not None else [],
-        "extra_tabla": df_extra.to_dict(orient="records") if df_extra is not None else [],
-        "tendencia_grafico": []
+        "bitacora": df_bit.to_dict(orient="records") if df_bit is not None else [],
+        "ventas_tabla": df_ventas.to_dict(orient="records") if df_ventas is not None else [],
+        "extra_tabla": df_cal.to_dict(orient="records") if df_cal is not None else [],
+        "tendencia_grafico": [] # Aquí iría lógica extra si la necesitas
     }
 
 @app.post("/api/chat")
-async def chat_con_datos(pregunta: str = Form(...), file: UploadFile = File(None)):
+async def chat_endpoint(pregunta: str = Form(...), file: UploadFile = File(None)):
+    """Orquestador principal del Chatbot."""
     global model
-    if not model: 
-        print("🔄 Reintentando conexión con IA...")
-        model = configurar_modelo()
     
-    if not model: 
-        return {"respuesta": "❌ Error Crítico: No hay conexión con Gemini. Revisa los logs en Render."}
+    # 1. Asegurar modelo
+    if not model:
+        model = obtener_modelo_gemini()
+        if not model:
+            return {"respuesta": "❌ Error Crítico: No se pudo conectar con la IA. Verifica las claves API en el servidor."}
 
-    # Contexto
-    df_ventas = cargar_csv(URL_VENTAS)
-    df_bitacora = cargar_csv(URL_BITACORA)
-    df_calendario = cargar_csv(URL_CALENDARIO)
-    
-    contexto_csv = ""
-    try:
-        if df_calendario is not None and not df_calendario.empty:
-            contexto_csv += f"\n### 📅 CALENDARIO / PROYECTOS:\n{df_calendario.to_markdown(index=False)}\n"
-        if df_ventas is not None and not df_ventas.empty:
-            contexto_csv += f"\n### 💰 VENTAS:\n{df_ventas.tail(20).to_markdown(index=False)}\n"
-        if df_bitacora is not None and not df_bitacora.empty:
-            contexto_csv += f"\n### ⏱️ BITÁCORA:\n{df_bitacora.head(20).to_markdown(index=False)}\n"
-    except:
-        contexto_csv += "\n(Datos internos no disponibles)\n"
+    # 2. Recopilar Contextos (Los 3 Pilares)
+    contexto_dashboard = obtener_contexto_dashboard()
+    contexto_pdf = await obtener_contexto_pdf(file)
+    contexto_web = obtener_contexto_web(pregunta)
 
-    texto_pdf = ""
-    if file:
-        try:
-            content = await file.read()
-            pdf = pypdf.PdfReader(io.BytesIO(content))
-            texto_pdf = "\n### 📄 PDF ADJUNTO:\n"
-            for p in pdf.pages[:10]: texto_pdf += p.extract_text() + "\n"
-        except: pass
-
-    info_web = buscar_en_web(pregunta)
-
+    # 3. Construir el Prompt Maestro (Jerarquía Lógica)
     prompt = f"""
-    Eres el Asistente Inteligente del MinCYT.
-    
-    FUENTES DE INFORMACIÓN:
-    1. [INTERNO] DASHBOARD (Prioridad ALTA para datos del ministerio):
-    {contexto_csv}
-    
-    2. [ARCHIVO] PDF (Prioridad ALTA si el usuario pregunta por el archivo):
-    {texto_pdf}
-    
-    3. [WEB] INTERNET (Prioridad ALTA para actualidad y deportes):
-    {info_web}
-    
-    PREGUNTA: "{pregunta}"
+    Eres el Asistente Inteligente del MinCYT. Tu objetivo es responder con precisión basándote en la siguiente jerarquía de fuentes:
+
+    --- FUENTE 1: DATOS INTERNOS (DASHBOARD) ---
+    (Prioridad MÁXIMA. Úsalo para preguntas sobre ventas, proyectos, fechas internas o tareas)
+    {contexto_dashboard}
+
+    --- FUENTE 2: DOCUMENTO ADJUNTO ---
+    (Prioridad ALTA si el usuario pregunta sobre "este archivo" o "el documento")
+    {contexto_pdf}
+
+    --- FUENTE 3: INFORMACIÓN DE INTERNET ---
+    (Úsalo SOLO si la respuesta no está en el Dashboard ni en el PDF. Ideal para deportes, noticias o conceptos generales)
+    {contexto_web}
+
+    --- PREGUNTA DEL USUARIO ---
+    "{pregunta}"
+
+    INSTRUCCIONES DE RESPUESTA:
+    1. Analiza primero el Dashboard. Si el dato está ahí, responde con eso.
+    2. Si no, busca en el PDF.
+    3. Si no, usa la información de Internet.
+    4. Cita la fuente de tu respuesta (ej: "Según la base de datos interna...", "Según noticias recientes...").
+    5. Sé breve y profesional.
     """
 
+    # 4. Generar Respuesta
     try:
-        res = model.generate_content(prompt)
-        return {"respuesta": res.text}
+        response = model.generate_content(prompt)
+        return {"respuesta": response.text}
     except Exception as e:
-        return {"respuesta": f"Error generando respuesta: {e}"}
+        return {"respuesta": f"❌ Ocurrió un error generando la respuesta: {str(e)}"}
