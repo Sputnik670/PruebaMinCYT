@@ -18,13 +18,16 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- CONFIGURACIÓN DE LA IA (MODO SEGURO) ---
+# --- CONFIGURACIÓN DE LA IA DINÁMICA ---
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 model = None
+last_config_log = ""
 
 def configurar_modelo():
+    global last_config_log
     if not GEMINI_API_KEY:
-        print("⚠️ Faltan credenciales API Key")
+        last_config_log = "No se encontró la variable GEMINI_API_KEY."
+        print(f"⚠️ {last_config_log}")
         return None
 
     genai.configure(api_key=GEMINI_API_KEY)
@@ -36,22 +39,47 @@ def configurar_modelo():
         HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_ONLY_HIGH,
     }
 
-    # Intentamos cargar el modelo más estándar SIN herramientas de búsqueda
-    modelos_a_probar = ['gemini-1.5-flash', 'gemini-pro', 'models/gemini-1.5-flash-latest']
-    
-    for m_name in modelos_a_probar:
-        try:
-            print(f"🧪 Probando conexión con: {m_name}")
-            m = genai.GenerativeModel(m_name, safety_settings=safety)
-            m.generate_content("Test de conexión") # Prueba de vida
-            print(f"✅ Conectado exitosamente a: {m_name}")
-            return m
-        except Exception as e:
-            print(f"❌ Falló {m_name}: {e}")
-            continue
-            
-    return None
+    try:
+        print("🔍 Consultando a Google los modelos disponibles para esta API Key...")
+        # Listamos TODOS los modelos que tu cuenta puede ver
+        all_models = list(genai.list_models())
+        
+        # Filtramos los que sirven para generar texto (chat)
+        chat_models = [m.name for m in all_models if 'generateContent' in m.supported_generation_methods]
+        
+        if not chat_models:
+            last_config_log = "La API Key es válida, pero no tiene acceso a ningún modelo de texto."
+            print(f"❌ {last_config_log}")
+            return None
 
+        print(f"📋 Modelos encontrados: {chat_models}")
+
+        # Estrategia de Selección:
+        # 1. Buscamos alguno que diga 'flash' (son los más rápidos)
+        selected_name = next((m for m in chat_models if 'flash' in m), None)
+        
+        # 2. Si no, alguno que diga 'pro'
+        if not selected_name:
+            selected_name = next((m for m in chat_models if 'pro' in m), None)
+            
+        # 3. Si no, el primero de la lista (cualquiera sirve)
+        if not selected_name:
+            selected_name = chat_models[0]
+
+        print(f"🚀 Seleccionado automáticamente: {selected_name}")
+        m = genai.GenerativeModel(selected_name, safety_settings=safety)
+        
+        # Prueba de vida final
+        m.generate_content("Test")
+        last_config_log = f"Conectado exitosamente a {selected_name}"
+        return m
+
+    except Exception as e:
+        last_config_log = f"Error al listar/configurar modelos: {str(e)}"
+        print(f"❌ {last_config_log}")
+        return None
+
+# Inicializamos
 model = configurar_modelo()
 
 # --- TUS ENLACES ---
@@ -80,7 +108,7 @@ def cargar_csv(url):
 
 @app.get("/")
 def home():
-    return {"status": "online", "mensaje": "Backend V11 - Modo Recuperación"}
+    return {"status": "online", "mensaje": "Backend V12 - Auto Discovery"}
 
 @app.get("/api/dashboard")
 def get_dashboard_data():
@@ -127,10 +155,11 @@ async def chat_con_datos(
     file: UploadFile = File(None)
 ):
     global model
+    # Reintentar configuración si falló al inicio
     if not model:
         model = configurar_modelo()
         if not model:
-            return {"respuesta": "❌ Error: No se pudo conectar con Google AI (Clave o Región)."}
+            return {"respuesta": f"❌ Error Fatal de IA: {last_config_log}"}
 
     # Carga de datos
     df_ventas = cargar_csv(URL_VENTAS)
