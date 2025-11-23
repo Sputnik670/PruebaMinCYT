@@ -20,7 +20,6 @@ app.add_middleware(
 )
 
 # --- VARIABLES DE ENTORNO ---
-# Asegúrate de configurar estas variables en Render o en tu entorno local
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 TAVILY_API_KEY = os.environ.get("TAVILY_API_KEY")
 
@@ -30,7 +29,7 @@ tavily_client = None
 # --- CONFIGURACIÓN IA (GEMINI) ---
 def configurar_modelo():
     if not GEMINI_API_KEY:
-        print("⚠️ Falta GEMINI_API_KEY. La IA no funcionará.")
+        print("⚠️ Falta GEMINI_API_KEY.")
         return None
 
     genai.configure(api_key=GEMINI_API_KEY)
@@ -42,201 +41,140 @@ def configurar_modelo():
         HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_ONLY_HIGH,
     }
 
-    print("🔍 DIAGNÓSTICO: Listando modelos disponibles para esta API KEY...")
+    print("🔍 Buscando modelos Gemini disponibles...")
     modelos_disponibles = []
     try:
         for m in genai.list_models():
             if 'generateContent' in m.supported_generation_methods:
-                print(f"   - Encontrado: {m.name}")
                 modelos_disponibles.append(m.name)
     except Exception as e:
-        print(f"⚠️ Error al listar modelos: {e}")
+        print(f"⚠️ Error listando modelos: {e}")
 
-    # Lista de prioridad (agregamos el prefijo 'models/' que a veces es necesario)
+    # Prioridad de modelos
     candidatos = [
-        'gemini-1.5-flash', 
-        'models/gemini-1.5-flash',
-        'gemini-1.5-pro',
-        'models/gemini-1.5-pro',
-        'gemini-pro',
-        'models/gemini-pro'
+        'gemini-1.5-flash', 'models/gemini-1.5-flash',
+        'gemini-1.5-pro', 'models/gemini-1.5-pro',
+        'gemini-pro', 'models/gemini-pro'
     ]
 
-    # Si encontramos modelos en la lista automática, los priorizamos
-    if modelos_disponibles:
-        # Preferencia por flash si está disponible
-        for m in modelos_disponibles:
-            if 'flash' in m:
-                candidatos.insert(0, m)
-
-    print(f"🧪 Probando conexión con candidatos: {candidatos}")
+    # Si encontramos flash en la lista oficial, lo ponemos primero
+    for m in modelos_disponibles:
+        if 'flash' in m: candidatos.insert(0, m)
 
     for nombre in candidatos:
         try:
             m = genai.GenerativeModel(nombre, safety_settings=safety)
             m.generate_content("Ping")
-            print(f"✅ IA Conectada exitosamente con: {nombre}")
+            print(f"✅ IA Conectada: {nombre}")
             return m
-        except Exception as e:
-            # print(f"   (Intento fallido con {nombre})") # Descomentar para ver detalle
+        except:
             continue
             
-    print("❌ No se pudo conectar con ningún modelo. Revisa los logs de 'Listando modelos'.")
+    print("❌ Error crítico: No se pudo conectar ninguna IA.")
     return None
 
 model = configurar_modelo()
 
-# --- CONFIGURACIÓN BÚSQUEDA (TAVILY) ---
+# --- TAVILY ---
 if TAVILY_API_KEY:
     try:
         tavily_client = TavilyClient(api_key=TAVILY_API_KEY)
-        print("✅ Buscador Tavily: ACTIVO")
-    except Exception as e:
-        print(f"❌ Error iniciando Tavily: {e}")
-else:
-    print("⚠️ Falta TAVILY_API_KEY. La búsqueda web estará desactivada.")
+        print("✅ Tavily: ACTIVO")
+    except: pass
 
 def buscar_en_web(consulta):
-    if not tavily_client:
-        return "(Búsqueda web no disponible: Falta API Key)"
-    
+    if not tavily_client: return "(Sin búsqueda web)"
     try:
-        print(f"🌍 Buscando en internet: {consulta}")
-        # search_depth="basic" es más rápido, "advanced" es más profundo
-        response = tavily_client.search(query=consulta, search_depth="basic", max_results=3)
-        
-        texto_resultados = "--- RESULTADOS DE BÚSQUEDA WEB (Fuente Externa) ---\n"
-        if 'results' in response:
-            for r in response['results']:
-                texto_resultados += f"Título: {r.get('title', 'N/A')}\n"
-                texto_resultados += f"Info: {r.get('content', 'N/A')}\n"
-                texto_resultados += f"Fuente: {r.get('url', 'N/A')}\n\n"
-        return texto_resultados
-    except Exception as e:
-        print(f"⚠️ Error en búsqueda: {e}")
-        return f"(Error buscando en internet: {e})"
+        resp = tavily_client.search(query=consulta, search_depth="basic", max_results=3)
+        txt = "--- INTERNET ---\n"
+        for r in resp.get('results', []):
+            txt += f"* {r.get('title')}: {r.get('content')} ({r.get('url')})\n"
+        return txt
+    except Exception as e: return f"(Error Web: {e})"
 
-# --- ENLACES DE DATOS (CSV) ---
-# Nota: Si el link de calendario no existe, la función cargar_csv lo manejará correctamente.
+# --- CARGA DE DATOS ---
 URL_BITACORA = "https://docs.google.com/spreadsheets/d/e/2PACX-1vR0-Uk3fi9iIO1XHja2j3nFlcy4NofCDsjzPh69-4D1jJkDUwq7E5qY1S201_e_0ODIk5WksS_ezYHi/pub?gid=643804140&single=true&output=csv"
 URL_VENTAS = "https://docs.google.com/spreadsheets/d/e/2PACX-1vR0-Uk3fi9iIO1XHja2j3nFlcy4NofCDsjzPh69-4D1jJkDUwq7E5qY1S201_e_0ODIk5WksS_ezYHi/pub?gid=0&single=true&output=csv"
 URL_NUEVA = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQiN48tufdUP4BDXv7cVrh80OI8Li2KqjXQ-4LalIFCJ9ZnMYHr3R4PvSrPDUsk_g/pub?output=csv"
-URL_CALENDARIO = "TU_LINK_CALENDARIO_AQUI" 
+URL_CALENDARIO = "TU_LINK_CALENDARIO"
 
-def cargar_csv(url):
+def cargar_csv(url, nombre="Datos"):
     try:
-        if not url or "TU_LINK" in url: 
-            return None
-        response = requests.get(url)
-        response.raise_for_status() # Lanza error si el status no es 200
-        df = pd.read_csv(io.BytesIO(response.content), encoding='utf-8')
-        df = df.fillna("")
+        if not url or "TU_LINK" in url: return None
+        r = requests.get(url, timeout=10) # Timeout para no colgar
+        r.raise_for_status()
+        df = pd.read_csv(io.BytesIO(r.content), encoding='utf-8').fillna("")
+        print(f"📊 {nombre}: Cargadas {len(df)} filas.")
         return df
-    except Exception as e: 
-        # print(f"Info: No se pudo cargar CSV de {url} ({e})")
+    except Exception as e:
+        print(f"⚠️ Error cargando {nombre}: {e}")
         return None
-
-@app.get("/")
-def home():
-    estado_web = "✅ Activo" if tavily_client else "❌ Inactivo (Falta Key)"
-    estado_ia = "✅ Activo" if model else "❌ Inactivo (Falta Key)"
-    return {"status": "online", "internet": estado_web, "ia": estado_ia}
 
 @app.get("/api/dashboard")
 def get_dashboard_data():
-    df_bitacora = cargar_csv(URL_BITACORA)
-    df_ventas = cargar_csv(URL_VENTAS)
-    df_nueva = cargar_csv(URL_NUEVA)
-    df_cal = cargar_csv(URL_CALENDARIO)
-
-    # Convertir a diccionarios o listas vacías si falló la carga
     return {
-        "bitacora": df_bitacora.to_dict(orient="records") if df_bitacora is not None else [],
-        "ventas_tabla": df_ventas.to_dict(orient="records") if df_ventas is not None else [],
-        "tendencia_grafico": [], # Puedes agregar lógica aquí si tus CSVs tienen fechas y montos
-        "extra_tabla": df_nueva.to_dict(orient="records") if df_nueva is not None else [],
-        "calendario": df_cal.to_dict(orient="records") if df_cal is not None else []
+        "bitacora": cargar_csv(URL_BITACORA, "Bitácora").to_dict(orient="records") if cargar_csv(URL_BITACORA) is not None else [],
+        "ventas_tabla": cargar_csv(URL_VENTAS, "Ventas").to_dict(orient="records") if cargar_csv(URL_VENTAS) is not None else [],
+        "extra_tabla": cargar_csv(URL_NUEVA, "Extra").to_dict(orient="records") if cargar_csv(URL_NUEVA) is not None else [],
+        "calendario": [],
+        "tendencia_grafico": []
     }
 
 @app.post("/api/chat")
-async def chat_con_datos(
-    pregunta: str = Form(...), 
-    file: UploadFile = File(None)
-):
+async def chat_con_datos(pregunta: str = Form(...), file: UploadFile = File(None)):
     global model
-    if not model:
-        model = configurar_modelo()
-        if not model: 
-            return {"respuesta": "❌ Error: La IA no está disponible. Verifica la API KEY en el servidor."}
+    if not model: model = configurar_modelo()
+    if not model: return {"respuesta": "❌ Error de conexión con la IA."}
 
-    # 1. Recuperar Datos Internos (Contexto CSV)
-    # Cargamos solo una muestra para no exceder tokens, a menos que uses Gemini 1.5 Pro que aguanta mucho.
-    df_ventas = cargar_csv(URL_VENTAS)
-    df_bitacora = cargar_csv(URL_BITACORA)
+    # 1. Cargar Datos CSV (Optimizados para IA)
+    df_ventas = cargar_csv(URL_VENTAS, "Ventas Chat")
+    df_bitacora = cargar_csv(URL_BITACORA, "Bitácora Chat")
     
-    contexto_csv = "--- DATOS INTERNOS DEL MINISTERIO ---\n"
-    if df_ventas is not None:
-        contexto_csv += f"Tabla de Ventas (últimos 30 registros):\n{df_ventas.tail(30).to_csv(index=False)}\n\n"
-    else:
-        contexto_csv += "Tabla de Ventas: No disponible.\n"
-        
-    if df_bitacora is not None:
-        contexto_csv += f"Bitácora de Tareas (primeros 20 registros):\n{df_bitacora.head(20).to_csv(index=False)}\n\n"
+    contexto_csv = ""
+    if df_ventas is not None and not df_ventas.empty:
+        # Usamos to_markdown que la IA entiende mejor
+        contexto_csv += f"\n### VENTAS (Últimos 30 registros):\n{df_ventas.tail(30).to_markdown(index=False)}\n"
+    
+    if df_bitacora is not None and not df_bitacora.empty:
+        contexto_csv += f"\n### BITÁCORA DE TAREAS (Primeros 20 registros):\n{df_bitacora.head(20).to_markdown(index=False)}\n"
 
-    # 2. Procesar PDF Adjunto (Contexto Documental)
+    if not contexto_csv:
+        contexto_csv = "(No se pudieron cargar los datos del Dashboard. Revisa los links de Google Sheets)"
+
+    # 2. PDF
     texto_pdf = ""
-    nombre_archivo = ""
     if file:
         try:
-            nombre_archivo = file.filename
-            # Leer contenido del archivo en memoria
             content = await file.read()
-            pdf_reader = pypdf.PdfReader(io.BytesIO(content))
-            
-            texto_pdf = f"--- CONTENIDO DEL ARCHIVO ADJUNTO ({nombre_archivo}) ---\n"
-            for i, page in enumerate(pdf_reader.pages):
-                texto_pdf += page.extract_text() + "\n"
-                # Limite de seguridad simple para no enviar libros enteros si el modelo es pequeño
-                if len(texto_pdf) > 50000: 
-                    texto_pdf += "\n[...Texto truncado por longitud...]"
-                    break
-        except Exception as e:
-            texto_pdf = f"\n[Error al leer el PDF adjunto: {str(e)}]\n"
+            pdf = pypdf.PdfReader(io.BytesIO(content))
+            texto_pdf = "\n### CONTENIDO PDF ADJUNTO:\n"
+            for p in pdf.pages[:5]: # Limitamos a 5 pags iniciales por velocidad
+                texto_pdf += p.extract_text() + "\n"
+        except: pass
 
-    # 3. Búsqueda Web (Contexto Externo)
-    # Buscamos en internet la pregunta del usuario para tener contexto actualizado
+    # 3. Web
     info_web = buscar_en_web(pregunta)
 
-    # 4. Prompt Maestro
-    # Estructuramos la petición para que la IA sepa qué fuente priorizar.
-    prompt_final = f"""
-    Eres un asistente inteligente para el MinCYT (Ministerio de Ciencia y Tecnología).
+    # 4. Prompt
+    prompt = f"""
+    Actúa como un Analista de Datos del MinCYT. Tienes acceso a tres fuentes:
     
-    Tu misión es responder la PREGUNTA DEL USUARIO basándote en la información disponible.
+    1. **DATOS INTERNOS (DASHBOARD)**:
+    {contexto_csv}
     
-    FUENTES DE INFORMACIÓN DISPONIBLES:
-    1. RESULTADOS DE INTERNET (Prioridad para noticias, hechos actuales, definiciones generales):
-    {info_web}
-    
-    2. DOCUMENTOS ADJUNTOS (Prioridad si el usuario pregunta sobre "el archivo", "el pdf" o "este documento"):
+    2. **DOCUMENTO ADJUNTO**:
     {texto_pdf}
     
-    3. DATOS INTERNOS CSV (Prioridad si el usuario pregunta sobre ventas, bitácora, registros internos):
-    {contexto_csv}
+    3. **INTERNET**:
+    {info_web}
     
     PREGUNTA DEL USUARIO: "{pregunta}"
     
-    INSTRUCCIONES:
-    - Si la respuesta está en el PDF adjunto, cítalo.
-    - Si la respuesta requiere datos en tiempo real (ej. precio dolar, noticias), usa la información de internet.
-    - Si usas los datos CSV, analiza los números brevemente.
-    - Si la información no está en ninguna fuente, indica que no tienes esa información.
-    - Responde siempre en español y con formato Markdown si es necesario.
+    Responde de forma clara. Si usas datos de la tabla, sé específico (ej: "Hay X ventas...").
     """
 
     try:
-        # Generar respuesta con Gemini
-        response = model.generate_content(prompt_final)
-        return {"respuesta": response.text}
+        res = model.generate_content(prompt)
+        return {"respuesta": res.text}
     except Exception as e:
-        return {"respuesta": f"❌ Ocurrió un error al procesar tu solicitud con la IA: {str(e)}"}
+        return {"respuesta": f"Error generando respuesta: {e}"}
