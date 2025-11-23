@@ -7,7 +7,8 @@ import google.generativeai as genai
 from google.generativeai.types import HarmCategory, HarmBlockThreshold
 import os
 import pypdf
-from duckduckgo_search import DDGS 
+from duckduckgo_search import DDGS
+import wikipedia
 
 app = FastAPI()
 
@@ -60,22 +61,37 @@ def configurar_modelo():
 
 model = configurar_modelo()
 
-# --- BÚSQUEDA WEB ---
+# --- BÚSQUEDA WEB ROBUSTA (DDG + Wikipedia) ---
 def buscar_en_web(consulta, max_results=3):
+    print(f"🌍 Intentando buscar: {consulta}")
+    
+    # INTENTO 1: DuckDuckGo (Buscador)
     try:
-        print(f"🌍 Buscando: {consulta}")
         with DDGS() as ddgs:
             results = list(ddgs.text(consulta, max_results=max_results))
         
-        if not results: return "ERROR_BUSQUEDA: No se obtuvieron resultados (posible bloqueo)."
-        
-        texto = ""
-        for i, r in enumerate(results):
-            texto += f"- {r['title']}: {r['body']} (Fuente: {r['href']})\n"
-        return texto
+        if results:
+            texto = "FUENTE: BÚSQUEDA WEB (DuckDuckGo)\n"
+            for i, r in enumerate(results):
+                texto += f"- {r['title']}: {r['body']} (Link: {r['href']})\n"
+            return texto
+        else:
+            print("⚠️ DDG devolvió lista vacía (Posible bloqueo IP).")
     except Exception as e:
-        print(f"⚠️ Error Web Search: {e}")
-        return f"ERROR_BUSQUEDA: Falló la conexión ({str(e)})."
+        print(f"⚠️ Falló DDG: {e}")
+
+    # INTENTO 2: Wikipedia (Enciclopedia) - FALLBACK
+    try:
+        print("📚 Activando Plan B: Wikipedia...")
+        wikipedia.set_lang("es")
+        # Buscamos y traemos un resumen de 3 oraciones
+        resumen = wikipedia.summary(consulta, sentences=4)
+        return f"FUENTE: WIKIPEDIA (Respaldo)\n{resumen}"
+    except Exception as e:
+        print(f"⚠️ Falló Wikipedia: {e}")
+
+    # Si todo falla
+    return "AVISO DEL SISTEMA: No se pudo acceder a información externa (Buscadores bloqueados temporalmente)."
 
 # --- ENLACES ---
 URL_BITACORA = "https://docs.google.com/spreadsheets/d/e/2PACX-1vR0-Uk3fi9iIO1XHja2j3nFlcy4NofCDsjzPh69-4D1jJkDUwq7E5qY1S201_e_0ODIk5WksS_ezYHi/pub?gid=643804140&single=true&output=csv"
@@ -134,13 +150,13 @@ async def chat_con_datos(pregunta: str = Form(...), file: UploadFile = File(None
             for page in reader.pages: texto_pdf += page.extract_text()
         except: pass
 
-    # Intentar búsqueda web
+    # Búsqueda con Fallback (DDG -> Wiki)
     info_web = buscar_en_web(pregunta)
 
-    # --- CONTEXTO ÉTICO ANTI-ALUCINACIÓN ---
+    # --- CONTEXTO ---
     contexto = f"""Eres un asistente experto del MinCYT.
     
-    ESTADO DE LA BÚSQUEDA WEB:
+    INFORMACIÓN EXTERNA RECUPERADA:
     {info_web}
     
     DATOS INTERNOS (CSV):
@@ -152,16 +168,10 @@ async def chat_con_datos(pregunta: str = Form(...), file: UploadFile = File(None
     
     PREGUNTA: {pregunta}
     
-    REGLAS DE RESPUESTA OBLIGATORIAS:
-    1. DATOS INTERNOS: Úsalos siempre que la pregunta sea sobre gestión, proyectos o presupuesto del ministerio.
-    
-    2. DATOS EXTERNOS (Web):
-       - Si 'ESTADO DE LA BÚSQUEDA WEB' contiene resultados reales, úsalos para responder.
-       - Si dice 'ERROR_BUSQUEDA' o no hay resultados útiles:
-         A) Si preguntan por un DATO DINÁMICO (ej: precio bitcoin hoy, clima ahora, noticia de ayer), DI CLARAMENTE: "No puedo acceder a internet en este momento para darte el dato en tiempo real". NO INVENTES UN VALOR.
-         B) Si preguntan por CONOCIMIENTO GENERAL ESTÁTICO (ej: qué es bitcoin, quién fue Einstein, historia), responde con tu conocimiento base.
-    
-    3. NO ALUCINES FECHAS NI MONTOS si no están en los CSV o en la Web.
+    INSTRUCCIONES:
+    1. Usa los 'DATOS INTERNOS' o 'PDF' para preguntas de gestión.
+    2. Usa la 'INFORMACIÓN EXTERNA' si la pregunta es de cultura general o actualidad.
+    3. Si la información externa dice "AVISO DEL SISTEMA" (fallo), y te preguntan algo de conocimiento general (ej: qué es Bitcoin), usa tu conocimiento base. No digas "tengo un error", di la definición.
     """
 
     try:
