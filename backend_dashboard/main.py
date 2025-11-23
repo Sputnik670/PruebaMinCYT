@@ -10,7 +10,7 @@ import pypdf
 from tavily import TavilyClient
 from tabulate import tabulate 
 from supabase import create_client, Client
-import numpy as np # Para manejar datos vacíos
+import numpy as np
 
 app = FastAPI()
 
@@ -28,7 +28,7 @@ TAVILY_API_KEY = os.environ.get("TAVILY_API_KEY")
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 
-# --- URLS DE TUS GOOGLE SHEETS (CSV PUBLISHED) ---
+# --- CONFIGURACIÓN GOOGLE SHEETS ---
 SHEETS = {
     "ventas": "https://docs.google.com/spreadsheets/d/e/2PACX-1vR0-Uk3fi9iIO1XHja2j3nFlcy4NofCDsjzPh69-4D1jJkDUwq7E5qY1S201_e_0ODIk5WksS_ezYHi/pub?gid=0&single=true&output=csv",
     "bitacora": "https://docs.google.com/spreadsheets/d/e/2PACX-1vR0-Uk3fi9iIO1XHja2j3nFlcy4NofCDsjzPh69-4D1jJkDUwq7E5qY1S201_e_0ODIk5WksS_ezYHi/pub?gid=643804140&single=true&output=csv",
@@ -42,7 +42,7 @@ if SUPABASE_URL and SUPABASE_KEY:
         supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
     except: pass
 
-# --- IA CONFIG ---
+# --- IA ---
 model = None
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
@@ -50,56 +50,86 @@ if GEMINI_API_KEY:
     try: model = genai.GenerativeModel('gemini-1.5-flash', safety_settings=safety)
     except: pass
 
-# --- LÓGICA DE SINCRONIZACIÓN (LA MAGIA) 🪄 ---
-def limpiar_dataframe(df):
-    """Limpia el DataFrame para que entre limpio a la base de datos."""
-    # 1. Normalizar nombres de columnas (Mayúsculas a minúsculas, espacios a guiones bajos)
-    df.columns = [c.lower().strip().replace(' ', '_').replace('(hs)', '').replace('ó', 'o').replace('ñ', 'n') for c in df.columns]
+# --- LÓGICA DE LIMPIEZA ROBUSTA 🪄 ---
+def normalizar_dataframe(df, tabla_destino):
+    """
+    Traduce las columnas del CSV a las columnas exactas de Supabase.
+    """
+    # 1. Limpieza básica de cabeceras
+    df.columns = [c.lower().strip() for c in df.columns]
     
-    # 2. Reemplazar NaN (vacíos) con None (NULL en SQL)
+    # 2. Diccionario de Traducción (CSV -> Supabase)
+    # Aquí definimos sinónimos comunes para que no falle si cambia el Excel.
+    traducciones = {
+        # VENTAS
+        "nombre": "proyecto", "nombre proyecto": "proyecto", "proyecto": "proyecto",
+        "monto": "monto", "inversion": "monto", "presupuesto": "monto",
+        "responsable": "responsable", "lead": "responsable",
+        "estado": "estado", "status": "estado",
+        "fecha": "fecha",
+        
+        # BITACORA
+        "tarea": "tarea", "actividad": "tarea",
+        "tipo": "tipo", "categoria": "tipo",
+        "duracion": "duracion", "duración": "duracion", "horas": "duracion", "duración (hs)": "duracion", "duracion (hs)": "duracion",
+        
+        # CALENDARIO
+        "evento": "evento", "nombre evento": "evento",
+        "pais": "pais", "país": "pais", "lugar": "pais",
+        "importancia": "importancia", "prioridad": "importancia"
+    }
+    
+    # Renombrar columnas usando el diccionario
+    df.rename(columns=traducciones, inplace=True)
+    
+    # 3. Filtrar solo las columnas que existen en nuestra DB para evitar errores
+    columnas_permitidas = ["fecha", "proyecto", "monto", "estado", "responsable", "tarea", "tipo", "duracion", "evento", "pais", "importancia"]
+    df = df[[c for c in df.columns if c in columnas_permitidas]]
+    
+    # 4. Limpieza de datos nulos y fechas
     df = df.replace({np.nan: None})
-    
-    # 3. Convertir fechas si existen (esto evita errores de formato)
     if 'fecha' in df.columns:
+        # Forzamos formato fecha estándar YYYY-MM-DD
         df['fecha'] = pd.to_datetime(df['fecha'], errors='coerce').dt.strftime('%Y-%m-%d')
         
     return df
 
 @app.post("/api/sync")
 def sincronizar_sheets():
-    """Lee Google Sheets y actualiza Supabase."""
-    if not supabase: return {"status": "error", "msg": "Falta configurar Supabase"}
+    if not supabase: return {"status": "error", "msg": "Falta Supabase Key"}
     
     log = []
     for tabla, url in SHEETS.items():
         try:
             if "TU_LINK" in url: continue
             
-            # 1. Leer de Google
+            # 1. Leer
             r = requests.get(url)
             df = pd.read_csv(io.BytesIO(r.content))
             
-            # 2. Limpiar datos
-            df_limpio = limpiar_dataframe(df)
+            # 2. Normalizar (Aquí está la mejora)
+            df_limpio = normalizar_dataframe(df, tabla)
+            
+            if df_limpio.empty:
+                log.append(f"⚠️ {tabla}: CSV vacío o columnas no reconocidas.")
+                continue
+
             datos_dict = df_limpio.to_dict(orient='records')
             
-            # 3. Borrar tabla vieja en Supabase (Truncate)
-            # Nota: Usamos delete all. Si la tabla es gigante, esto se optimiza, pero para dashboard va bien.
+            # 3. Escribir
             supabase.table(tabla).delete().neq("id", 0).execute() 
-            
-            # 4. Insertar datos nuevos
             if datos_dict:
                 supabase.table(tabla).insert(datos_dict).execute()
             
-            log.append(f"✅ {tabla.capitalize()}: {len(datos_dict)} filas sincronizadas.")
+            log.append(f"✅ {tabla}: {len(datos_dict)} filas guardadas.")
             
         except Exception as e:
-            log.append(f"❌ Error en {tabla}: {str(e)}")
-            print(f"Error sync {tabla}: {e}")
+            log.append(f"❌ Error {tabla}: {str(e)}")
+            print(f"SYNC ERROR {tabla}: {e}")
 
     return {"status": "ok", "detalles": log}
 
-# --- ENDPOINTS NORMALES (LEEN DE SUPABASE, NO DE GOOGLE) ---
+# --- RESTO DE ENDPOINTS (Iguales) ---
 def get_tabla(nombre):
     if not supabase: return []
     try: return supabase.table(nombre).select("*").limit(100).execute().data
@@ -117,32 +147,29 @@ def get_dashboard():
 async def chat(pregunta: str = Form(...), file: UploadFile = File(None)):
     if not model: return {"respuesta": "Error IA"}
     
-    # Contexto DB
-    data_cal = get_tabla("calendario")
-    data_ven = get_tabla("ventas")
-    txt_db = ""
-    if data_cal: txt_db += f"\nCALENDARIO:\n{tabulate(data_cal, headers='keys')}\n"
-    if data_ven: txt_db += f"\nVENTAS:\n{tabulate(data_ven, headers='keys')}\n"
-    
-    # Contexto Web
+    ctx_dash = ""
+    # Intentamos traer datos para el chat
+    try:
+        v = get_tabla("ventas")
+        c = get_tabla("calendario")
+        if v: ctx_dash += f"\nVENTAS:\n{tabulate(v, headers='keys')}\n"
+        if c: ctx_dash += f"\nCALENDARIO:\n{tabulate(c, headers='keys')}\n"
+    except: pass
+
     txt_web = ""
     if TAVILY_API_KEY:
-        try: 
+        try:
             t = TavilyClient(api_key=TAVILY_API_KEY)
-            res = t.search(pregunta, max_results=2)
+            res = t.search(pregunta)
             txt_web = str(res.get('results'))
         except: pass
 
-    # Prompt
-    prompt = f"""Asistente MinCYT. 
-    DATOS OFICIALES (DB): {txt_db}
-    INTERNET: {txt_web}
-    
+    prompt = f"""Asistente MinCYT.
+    DATOS: {ctx_dash}
+    WEB: {txt_web}
     PREGUNTA: {pregunta}"""
     
     try:
         res = model.generate_content(prompt)
-        # (Opcional) Guardar historial aquí
-        if supabase: supabase.table("historial_chat").insert({"pregunta": pregunta, "respuesta": res.text, "fuente_usada": "Mix"}).execute()
         return {"respuesta": res.text}
     except Exception as e: return {"respuesta": str(e)}
