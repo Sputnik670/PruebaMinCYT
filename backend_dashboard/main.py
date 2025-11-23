@@ -18,71 +18,51 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- CONFIGURACIÓN DE LA IA ROBUSTA ---
+# --- CONFIGURACIÓN DE LA IA (VERSIÓN ESTABLE) ---
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 model = None
-last_error_log = "" # Variable para guardar el chisme del error
+last_error = ""
 
 def configurar_modelo():
-    global last_error_log
+    global last_error
     if not GEMINI_API_KEY:
-        last_error_log = "Variable GEMINI_API_KEY no encontrada en Render."
-        print(f"⚠️ {last_error_log}")
+        last_error = "Falta API Key"
         return None
 
     genai.configure(api_key=GEMINI_API_KEY)
     
-    # Lista ampliada de candidatos (con y sin prefijo 'models/')
-    candidates = [
-        "gemini-1.5-flash",
-        "gemini-1.5-pro",
-        "gemini-1.0-pro",
-        "gemini-pro",
-        "models/gemini-1.5-flash",
-        "models/gemini-pro"
-    ]
-
-    safety_settings = {
+    # Configuracion de seguridad
+    safety = {
         HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_ONLY_HIGH,
         HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_ONLY_HIGH,
         HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_ONLY_HIGH,
         HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_ONLY_HIGH,
     }
 
-    tools_config = [{"google_search": {}}] 
-
-    print("🔄 Iniciando protocolo de selección de modelo IA...")
-    error_accumulado = []
-
-    for model_name in candidates:
+    # Intentamos solo con el modelo FLASH (el más compatible y gratuito)
+    # Sin 'tools' complejas por ahora para asegurar conexión.
+    try:
+        print("🔌 Conectando con Gemini 1.5 Flash...")
+        m = genai.GenerativeModel('gemini-1.5-flash', safety_settings=safety)
+        # Prueba simple
+        m.generate_content("Hola")
+        print("✅ IA Conectada Exitosamente")
+        return m
+    except Exception as e:
+        print(f"❌ Error Flash: {e}")
+        last_error = str(e)
+        
+        # Intento de respaldo con Pro
         try:
-            print(f"🧪 Probando modelo: {model_name}...")
-            # INTENTO A: Con Herramientas
-            try:
-                m = genai.GenerativeModel(model_name, tools=tools_config, safety_settings=safety_settings)
-                m.generate_content("test") 
-                print(f"✅ ÉXITO TOTAL: {model_name}")
-                return m
-            except Exception as e_tools:
-                error_accumulado.append(f"{model_name} (Tools): {str(e_tools)}")
-
-            # INTENTO B: Modo Estándar
-            m = genai.GenerativeModel(model_name, safety_settings=safety_settings)
-            m.generate_content("test")
-            print(f"✅ ÉXITO PARCIAL: {model_name}")
+            print("🔄 Intentando con Gemini Pro...")
+            m = genai.GenerativeModel('gemini-pro', safety_settings=safety)
+            m.generate_content("Hola")
+            print("✅ IA Conectada (Modo Pro)")
             return m
+        except Exception as e2:
+            last_error += f" | Pro: {str(e2)}"
+            return None
 
-        except Exception as e:
-            error_str = f"{model_name} (Std): {str(e)}"
-            print(f"❌ {error_str}")
-            error_accumulado.append(error_str)
-            continue
-    
-    last_error_log = " | ".join(error_accumulado)
-    print(f"💀 FATAL: {last_error_log}")
-    return None
-
-# Inicializamos el modelo
 model = configurar_modelo()
 
 # --- TUS ENLACES ---
@@ -95,8 +75,7 @@ URL_CALENDARIO = "TU_LINK_CALENDARIO_AQUI"
 def limpiar_dinero(valor):
     if pd.isna(valor): return 0.0
     s = str(valor).replace("$", "").replace(" ", "").strip()
-    if "," in s:
-        s = s.replace(".", "").replace(",", ".")
+    if "," in s: s = s.replace(".", "").replace(",", ".")
     return float(s) if s else 0.0
 
 def cargar_csv(url):
@@ -107,16 +86,16 @@ def cargar_csv(url):
         df = pd.read_csv(io.BytesIO(response.content), encoding='utf-8')
         df = df.fillna("")
         return df
-    except Exception as e:
+    except Exception:
         return None
 
 @app.get("/")
 def home():
-    return {"status": "online", "mensaje": "Backend V9.1 - Debugging Mode"}
+    return {"status": "online", "mensaje": "Backend V10 - Stable Core"}
 
 @app.get("/api/dashboard")
 def get_dashboard_data():
-    # (Lógica igual...)
+    # (Lógica de siempre)
     df_bitacora = cargar_csv(URL_BITACORA)
     datos_bitacora = df_bitacora.to_dict(orient="records") if df_bitacora is not None else []
 
@@ -159,52 +138,44 @@ async def chat_con_datos(
     file: UploadFile = File(None)
 ):
     global model
-    # Intentar revivir el modelo si murió
     if not model:
         model = configurar_modelo()
         if not model:
-            # AQUÍ ESTÁ EL CAMBIO: Devolvemos el detalle del error para que el usuario lo vea
-            msg_error = f"❌ Error Crítico de Conexión IA. Detalles técnicos: {last_error_log[:500]}..." 
-            return {"respuesta": msg_error}
+            return {"respuesta": f"❌ Error IA: No se pudo conectar. Detalles: {last_error}"}
 
+    # Carga de datos
     df_ventas = cargar_csv(URL_VENTAS)
-    df_bitacora = cargar_csv(URL_BITACORA)
     df_extra = cargar_csv(URL_NUEVA)
     
-    texto_pdf_usuario = ""
-    nombre_archivo = ""
+    texto_pdf = ""
     if file:
         try:
-            nombre_archivo = file.filename
             content = await file.read()
             pdf_file = io.BytesIO(content)
             reader = pypdf.PdfReader(pdf_file)
-            for i, page in enumerate(reader.pages):
-                texto_pdf_usuario += f"[Página {i+1}] {page.extract_text()}\n"
+            for page in reader.pages:
+                texto_pdf += page.extract_text() + "\n"
         except Exception as e:
-            texto_pdf_usuario = f"Error al leer archivo: {str(e)}"
+            texto_pdf = f"Error leyendo PDF: {e}"
 
-    contexto = """Eres un asistente inteligente del MinCYT.
-    FUENTES DE INFORMACIÓN:
-    1. DATOS INTERNOS (CSV adjuntos).
-    2. ARCHIVOS USUARIO (PDF adjunto).
-    3. INTERNET (Google Search): Úsalo si la pregunta requiere datos de actualidad o externos.
+    # Contexto Simplificado
+    contexto = f"""Eres un asistente del MinCYT.
+    DATOS DISPONIBLES:
     
-    DATOS:
-    """
+    1. VENTAS:
+    {df_ventas.head(30).to_csv(index=False) if df_ventas is not None else 'No disponible'}
     
-    if df_ventas is not None:
-        contexto += f"--- VENTAS (Resumen) ---\n{df_ventas.head(50).to_csv(index=False)}\n\n"
-    if df_extra is not None:
-        contexto += f"--- CALENDARIO/EXTRA (Resumen) ---\n{df_extra.head(50).to_csv(index=False)}\n\n"
-        
-    if texto_pdf_usuario:
-        contexto += f"--- ARCHIVO ADJUNTO ({nombre_archivo}) ---\n{texto_pdf_usuario[:50000]}\n\n"
-        
-    contexto += f"PREGUNTA: {pregunta}\nRESPUESTA:"
+    2. DATOS EXTRA:
+    {df_extra.head(30).to_csv(index=False) if df_extra is not None else 'No disponible'}
+    
+    3. DOCUMENTO ADJUNTO:
+    {texto_pdf[:20000] if texto_pdf else 'Ninguno'}
+    
+    PREGUNTA: {pregunta}
+    RESPUESTA:"""
 
     try:
         response = model.generate_content(contexto)
         return {"respuesta": response.text}
     except Exception as e:
-        return {"respuesta": f"Error en la IA ({type(e).__name__}): {str(e)}"}
+        return {"respuesta": f"Error generando respuesta: {e}"}
