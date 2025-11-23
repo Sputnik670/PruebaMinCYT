@@ -46,12 +46,10 @@ def configurar_modelo():
         # 1. Diagnóstico: Listar qué ve la API realmente
         print("🔍 Iniciando conexión con IA...")
         candidatos = [
-            'gemini-1.5-flash', 
-            'models/gemini-1.5-flash',
+            'gemini-1.5-flash',
             'gemini-1.5-pro',
-            'models/gemini-1.5-pro',
-            'gemini-pro',
-            'models/gemini-pro'
+            'gemini-1.0-pro',
+            'gemini-pro'
         ]
 
         # Intento de conexión iterativo
