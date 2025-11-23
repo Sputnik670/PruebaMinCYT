@@ -35,7 +35,6 @@ def configurar_modelo():
 
     genai.configure(api_key=GEMINI_API_KEY)
     
-    # Configuración de seguridad ajustada para evitar bloqueos innecesarios en documentos técnicos
     safety = {
         HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_ONLY_HIGH,
         HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_ONLY_HIGH,
@@ -43,22 +42,46 @@ def configurar_modelo():
         HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_ONLY_HIGH,
     }
 
-    # Intentamos conectar con el mejor modelo disponible
-    # Agregamos 'gemini-pro' al final como respaldo seguro
-    candidatos = ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-1.0-pro', 'gemini-pro']
-    
+    print("🔍 DIAGNÓSTICO: Listando modelos disponibles para esta API KEY...")
+    modelos_disponibles = []
+    try:
+        for m in genai.list_models():
+            if 'generateContent' in m.supported_generation_methods:
+                print(f"   - Encontrado: {m.name}")
+                modelos_disponibles.append(m.name)
+    except Exception as e:
+        print(f"⚠️ Error al listar modelos: {e}")
+
+    # Lista de prioridad (agregamos el prefijo 'models/' que a veces es necesario)
+    candidatos = [
+        'gemini-1.5-flash', 
+        'models/gemini-1.5-flash',
+        'gemini-1.5-pro',
+        'models/gemini-1.5-pro',
+        'gemini-pro',
+        'models/gemini-pro'
+    ]
+
+    # Si encontramos modelos en la lista automática, los priorizamos
+    if modelos_disponibles:
+        # Preferencia por flash si está disponible
+        for m in modelos_disponibles:
+            if 'flash' in m:
+                candidatos.insert(0, m)
+
+    print(f"🧪 Probando conexión con candidatos: {candidatos}")
+
     for nombre in candidatos:
         try:
             m = genai.GenerativeModel(nombre, safety_settings=safety)
-            # Prueba rápida de conexión
             m.generate_content("Ping")
-            print(f"✅ IA Conectada exitosamente: {nombre}")
+            print(f"✅ IA Conectada exitosamente con: {nombre}")
             return m
         except Exception as e:
-            print(f"Intento fallido con {nombre}: {e}")
+            # print(f"   (Intento fallido con {nombre})") # Descomentar para ver detalle
             continue
             
-    print("❌ No se pudo conectar con ningún modelo de Gemini.")
+    print("❌ No se pudo conectar con ningún modelo. Revisa los logs de 'Listando modelos'.")
     return None
 
 model = configurar_modelo()
