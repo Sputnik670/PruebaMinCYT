@@ -18,15 +18,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- CONFIGURACIÓN IA ---
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 model = None
-last_error = ""
 
 def configurar_modelo():
-    global last_error
     if not GEMINI_API_KEY:
-        last_error = "Falta API Key"
+        print("⚠️ Sin API Key")
         return None
 
     genai.configure(api_key=GEMINI_API_KEY)
@@ -38,19 +35,12 @@ def configurar_modelo():
         HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_ONLY_HIGH,
     }
 
-    candidatos = ['gemini-1.5-flash', 'gemini-pro', 'gemini-1.0-pro']
-
-    for nombre in candidatos:
-        try:
-            m = genai.GenerativeModel(nombre, safety_settings=safety)
-            m.generate_content("Test")
-            print(f"✅ IA Lista: {nombre}")
-            return m
-        except Exception as e:
-            print(f"❌ Falló {nombre}: {e}")
-            last_error = str(e)
-            
-    return None
+    # Intentamos el modelo más estándar y robusto
+    try:
+        m = genai.GenerativeModel('gemini-pro', safety_settings=safety)
+        return m
+    except Exception:
+        return None
 
 model = configurar_modelo()
 
@@ -60,7 +50,6 @@ URL_VENTAS = "https://docs.google.com/spreadsheets/d/e/2PACX-1vR0-Uk3fi9iIO1XHja
 URL_NUEVA = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQiN48tufdUP4BDXv7cVrh80OI8Li2KqjXQ-4LalIFCJ9ZnMYHr3R4PvSrPDUsk_g/pub?output=csv"
 URL_CALENDARIO = "TU_LINK_CALENDARIO_AQUI" 
 
-# --- UTILS ---
 def limpiar_dinero(valor):
     if pd.isna(valor): return 0.0
     s = str(valor).replace("$", "").replace(" ", "").strip()
@@ -80,11 +69,11 @@ def cargar_csv(url):
 
 @app.get("/")
 def home():
-    return {"status": "online", "mensaje": "Backend V15 - Contexto Optimizado"}
+    return {"status": "online", "mensaje": "Backend V16"}
 
 @app.get("/api/dashboard")
 def get_dashboard_data():
-    # (Lógica Dashboard intacta)
+    # (Lógica igual...)
     df_bitacora = cargar_csv(URL_BITACORA)
     datos_bitacora = df_bitacora.to_dict(orient="records") if df_bitacora is not None else []
 
@@ -130,17 +119,15 @@ async def chat_con_datos(
     if not model:
         model = configurar_modelo()
         if not model:
-            return {"respuesta": f"❌ Error IA: {last_error}"}
+            return {"respuesta": "❌ Error IA: Problema de conexión con Google AI."}
 
     df_ventas = cargar_csv(URL_VENTAS)
     df_extra = cargar_csv(URL_NUEVA)
     df_bitacora = cargar_csv(URL_BITACORA)
     
     texto_pdf = ""
-    nombre_archivo = ""
     if file:
         try:
-            nombre_archivo = file.filename
             content = await file.read()
             pdf_file = io.BytesIO(content)
             reader = pypdf.PdfReader(pdf_file)
@@ -149,29 +136,24 @@ async def chat_con_datos(
         except Exception as e:
             texto_pdf = f"Error PDF: {e}"
 
-    # --- CONSTRUCCIÓN INTELIGENTE DEL CONTEXTO ---
-    # Convertimos a CSV pero limitamos a las últimas 100 filas para no saturar,
-    # pero lo suficiente para ver datos recientes.
-    
     contexto = f"""Eres un asistente experto del MinCYT.
     
-    DATOS DISPONIBLES (Últimos registros):
+    DATOS DISPONIBLES:
     
-    1. VENTAS E INVERSIÓN:
+    1. VENTAS:
     {df_ventas.tail(100).to_csv(index=False) if df_ventas is not None else 'No disponible'}
     
-    2. CALENDARIO Y DATOS EXTRA:
-    {df_extra.to_csv(index=False) if df_extra is not None else 'No disponible'} 
+    2. EXTRA:
+    {df_extra.to_csv(index=False) if df_extra is not None else 'No disponible'}
     
-    3. DOCUMENTO ADJUNTO:
-    {texto_pdf[:30000] if texto_pdf else 'Ninguno'}
+    3. PDF:
+    {texto_pdf[:20000] if texto_pdf else 'Ninguno'}
     
     PREGUNTA: {pregunta}
-    
-    NOTA: Si te preguntan por una fecha específica, búscala en los datos. Si no está, di que no figura en los registros provistos."""
+    RESPUESTA:"""
 
     try:
         response = model.generate_content(contexto)
         return {"respuesta": response.text}
     except Exception as e:
-        return {"respuesta": f"Error IA: {e}"}
+        return {"respuesta": f"Error: {e}"}
