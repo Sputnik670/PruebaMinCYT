@@ -35,11 +35,12 @@ def configurar_modelo():
         HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_ONLY_HIGH,
     }
 
-    # Intentamos el modelo más estándar y robusto
+    # Intentamos DIRECTAMENTE con gemini-1.5-flash que es el actual estándar gratuito
     try:
-        m = genai.GenerativeModel('gemini-pro', safety_settings=safety)
+        m = genai.GenerativeModel('gemini-1.5-flash', safety_settings=safety)
         return m
-    except Exception:
+    except Exception as e:
+        print(f"Error al cargar gemini-1.5-flash: {e}")
         return None
 
 model = configurar_modelo()
@@ -69,7 +70,7 @@ def cargar_csv(url):
 
 @app.get("/")
 def home():
-    return {"status": "online", "mensaje": "Backend V16"}
+    return {"status": "online", "mensaje": "Backend V17 - Gemini 1.5 Flash"}
 
 @app.get("/api/dashboard")
 def get_dashboard_data():
@@ -119,7 +120,7 @@ async def chat_con_datos(
     if not model:
         model = configurar_modelo()
         if not model:
-            return {"respuesta": "❌ Error IA: Problema de conexión con Google AI."}
+            return {"respuesta": "❌ Error IA: Problema de conexión con Gemini 1.5 Flash."}
 
     df_ventas = cargar_csv(URL_VENTAS)
     df_extra = cargar_csv(URL_NUEVA)
