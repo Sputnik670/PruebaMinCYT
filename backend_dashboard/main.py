@@ -18,20 +18,17 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- CONFIGURACIÓN DE LA IA (VERSIÓN ESTABLE) ---
+# --- CONFIGURACIÓN DE LA IA (MODO SEGURO) ---
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 model = None
-last_error = ""
 
 def configurar_modelo():
-    global last_error
     if not GEMINI_API_KEY:
-        last_error = "Falta API Key"
+        print("⚠️ Faltan credenciales API Key")
         return None
 
     genai.configure(api_key=GEMINI_API_KEY)
     
-    # Configuracion de seguridad
     safety = {
         HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_ONLY_HIGH,
         HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_ONLY_HIGH,
@@ -39,29 +36,21 @@ def configurar_modelo():
         HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_ONLY_HIGH,
     }
 
-    # Intentamos solo con el modelo FLASH (el más compatible y gratuito)
-    # Sin 'tools' complejas por ahora para asegurar conexión.
-    try:
-        print("🔌 Conectando con Gemini 1.5 Flash...")
-        m = genai.GenerativeModel('gemini-1.5-flash', safety_settings=safety)
-        # Prueba simple
-        m.generate_content("Hola")
-        print("✅ IA Conectada Exitosamente")
-        return m
-    except Exception as e:
-        print(f"❌ Error Flash: {e}")
-        last_error = str(e)
-        
-        # Intento de respaldo con Pro
+    # Intentamos cargar el modelo más estándar SIN herramientas de búsqueda
+    modelos_a_probar = ['gemini-1.5-flash', 'gemini-pro', 'models/gemini-1.5-flash-latest']
+    
+    for m_name in modelos_a_probar:
         try:
-            print("🔄 Intentando con Gemini Pro...")
-            m = genai.GenerativeModel('gemini-pro', safety_settings=safety)
-            m.generate_content("Hola")
-            print("✅ IA Conectada (Modo Pro)")
+            print(f"🧪 Probando conexión con: {m_name}")
+            m = genai.GenerativeModel(m_name, safety_settings=safety)
+            m.generate_content("Test de conexión") # Prueba de vida
+            print(f"✅ Conectado exitosamente a: {m_name}")
             return m
-        except Exception as e2:
-            last_error += f" | Pro: {str(e2)}"
-            return None
+        except Exception as e:
+            print(f"❌ Falló {m_name}: {e}")
+            continue
+            
+    return None
 
 model = configurar_modelo()
 
@@ -91,11 +80,11 @@ def cargar_csv(url):
 
 @app.get("/")
 def home():
-    return {"status": "online", "mensaje": "Backend V10 - Stable Core"}
+    return {"status": "online", "mensaje": "Backend V11 - Modo Recuperación"}
 
 @app.get("/api/dashboard")
 def get_dashboard_data():
-    # (Lógica de siempre)
+    # (Lógica Dashboard intacta)
     df_bitacora = cargar_csv(URL_BITACORA)
     datos_bitacora = df_bitacora.to_dict(orient="records") if df_bitacora is not None else []
 
@@ -141,7 +130,7 @@ async def chat_con_datos(
     if not model:
         model = configurar_modelo()
         if not model:
-            return {"respuesta": f"❌ Error IA: No se pudo conectar. Detalles: {last_error}"}
+            return {"respuesta": "❌ Error: No se pudo conectar con Google AI (Clave o Región)."}
 
     # Carga de datos
     df_ventas = cargar_csv(URL_VENTAS)
@@ -158,7 +147,7 @@ async def chat_con_datos(
         except Exception as e:
             texto_pdf = f"Error leyendo PDF: {e}"
 
-    # Contexto Simplificado
+    # Contexto
     contexto = f"""Eres un asistente del MinCYT.
     DATOS DISPONIBLES:
     
