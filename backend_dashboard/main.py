@@ -18,7 +18,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- CONFIGURACIÓN DE LA IA ---
+# --- CONFIGURACIÓN IA ---
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 model = None
 last_error = ""
@@ -26,8 +26,7 @@ last_error = ""
 def configurar_modelo():
     global last_error
     if not GEMINI_API_KEY:
-        last_error = "Falta API Key en variables de entorno."
-        print(f"⚠️ {last_error}")
+        last_error = "Falta API Key"
         return None
 
     genai.configure(api_key=GEMINI_API_KEY)
@@ -39,37 +38,29 @@ def configurar_modelo():
         HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_ONLY_HIGH,
     }
 
-    candidatos = [
-        'gemini-1.5-flash',
-        'gemini-1.5-pro',
-        'gemini-1.0-pro',
-        'gemini-pro'
-    ]
+    candidatos = ['gemini-1.5-flash', 'gemini-pro', 'gemini-1.0-pro']
 
-    print("🔄 Iniciando conexión con IA...")
     for nombre in candidatos:
         try:
-            print(f"🧪 Probando modelo: {nombre}")
             m = genai.GenerativeModel(nombre, safety_settings=safety)
             m.generate_content("Test")
-            print(f"✅ Conectado exitosamente a: {nombre}")
+            print(f"✅ IA Lista: {nombre}")
             return m
         except Exception as e:
             print(f"❌ Falló {nombre}: {e}")
-            last_error = f"Falló {nombre}: {str(e)}"
-            continue
+            last_error = str(e)
             
     return None
 
 model = configurar_modelo()
 
-# --- TUS ENLACES ---
+# --- ENLACES ---
 URL_BITACORA = "https://docs.google.com/spreadsheets/d/e/2PACX-1vR0-Uk3fi9iIO1XHja2j3nFlcy4NofCDsjzPh69-4D1jJkDUwq7E5qY1S201_e_0ODIk5WksS_ezYHi/pub?gid=643804140&single=true&output=csv"
 URL_VENTAS = "https://docs.google.com/spreadsheets/d/e/2PACX-1vR0-Uk3fi9iIO1XHja2j3nFlcy4NofCDsjzPh69-4D1jJkDUwq7E5qY1S201_e_0ODIk5WksS_ezYHi/pub?gid=0&single=true&output=csv"
 URL_NUEVA = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQiN48tufdUP4BDXv7cVrh80OI8Li2KqjXQ-4LalIFCJ9ZnMYHr3R4PvSrPDUsk_g/pub?output=csv"
 URL_CALENDARIO = "TU_LINK_CALENDARIO_AQUI" 
 
-# --- HERRAMIENTAS ---
+# --- UTILS ---
 def limpiar_dinero(valor):
     if pd.isna(valor): return 0.0
     s = str(valor).replace("$", "").replace(" ", "").strip()
@@ -89,7 +80,7 @@ def cargar_csv(url):
 
 @app.get("/")
 def home():
-    return {"status": "online", "mensaje": "Backend V14 - Full Context Mode"}
+    return {"status": "online", "mensaje": "Backend V15 - Contexto Optimizado"}
 
 @app.get("/api/dashboard")
 def get_dashboard_data():
@@ -139,7 +130,7 @@ async def chat_con_datos(
     if not model:
         model = configurar_modelo()
         if not model:
-            return {"respuesta": f"❌ Error IA: No se pudo conectar. {last_error}"}
+            return {"respuesta": f"❌ Error IA: {last_error}"}
 
     df_ventas = cargar_csv(URL_VENTAS)
     df_extra = cargar_csv(URL_NUEVA)
@@ -158,25 +149,26 @@ async def chat_con_datos(
         except Exception as e:
             texto_pdf = f"Error PDF: {e}"
 
-    # --- CAMBIO CLAVE: ELIMINAMOS .head(30) PARA QUE LEA TODO ---
-    contexto = f"""Eres un asistente experto del MinCYT. Analiza TODOS los datos provistos.
+    # --- CONSTRUCCIÓN INTELIGENTE DEL CONTEXTO ---
+    # Convertimos a CSV pero limitamos a las últimas 100 filas para no saturar,
+    # pero lo suficiente para ver datos recientes.
     
-    FUENTES DE DATOS COMPLETAS:
+    contexto = f"""Eres un asistente experto del MinCYT.
     
-    1. VENTAS E INVERSIÓN (CSV):
-    {df_ventas.to_csv(index=False) if df_ventas is not None else 'No disponible'}
+    DATOS DISPONIBLES (Últimos registros):
     
-    2. CALENDARIO Y DATOS EXTRA (CSV):
-    {df_extra.to_csv(index=False) if df_extra is not None else 'No disponible'}
+    1. VENTAS E INVERSIÓN:
+    {df_ventas.tail(100).to_csv(index=False) if df_ventas is not None else 'No disponible'}
     
-    3. BITÁCORA DE HORAS (CSV):
-    {df_bitacora.to_csv(index=False) if df_bitacora is not None else 'No disponible'}
+    2. CALENDARIO Y DATOS EXTRA:
+    {df_extra.to_csv(index=False) if df_extra is not None else 'No disponible'} 
     
-    4. DOCUMENTO ADJUNTO (PDF):
-    {texto_pdf[:50000] if texto_pdf else 'Ninguno'}
+    3. DOCUMENTO ADJUNTO:
+    {texto_pdf[:30000] if texto_pdf else 'Ninguno'}
     
-    PREGUNTA DEL USUARIO: {pregunta}
-    RESPUESTA:"""
+    PREGUNTA: {pregunta}
+    
+    NOTA: Si te preguntan por una fecha específica, búscala en los datos. Si no está, di que no figura en los registros provistos."""
 
     try:
         response = model.generate_content(contexto)
