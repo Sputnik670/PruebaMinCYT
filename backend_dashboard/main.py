@@ -39,50 +39,43 @@ def configurar_modelo():
     }
 
     try:
-        print("🔍 Preguntando a Google qué modelos tienes disponibles...")
-        # PASO 1: Obtener la lista EXACTA de Google
+        print("🔍 Buscando modelos disponibles...")
         listado_modelos = list(genai.list_models())
-        
-        # Filtramos los que sirven para generar texto
         modelos_validos = [m.name for m in listado_modelos if 'generateContent' in m.supported_generation_methods]
         
-        print(f"📋 Tu cuenta tiene acceso a: {modelos_validos}")
-        
-        if not modelos_validos:
-            return None
+        if not modelos_validos: return None
 
-        # PASO 2: Elegir el mejor de la lista REAL
-        # Buscamos preferentemente 'flash' o '1.5'
+        # Preferencia: Flash > 1.5 > Pro
         elegido = next((m for m in modelos_validos if 'flash' in m), None)
-        if not elegido:
-            elegido = next((m for m in modelos_validos if '1.5' in m), None)
-        if not elegido:
-            elegido = modelos_validos[0] # El primero que haya
+        if not elegido: elegido = next((m for m in modelos_validos if '1.5' in m), None)
+        if not elegido: elegido = modelos_validos[0]
 
-        print(f"🚀 Usando modelo real: {elegido}")
+        print(f"🚀 Modelo seleccionado: {elegido}")
         modelo_nombre_final = elegido
-        
         return genai.GenerativeModel(elegido, safety_settings=safety)
 
     except Exception as e:
-        print(f"❌ Error al listar modelos: {e}")
-        # Fallback desesperado
-        return genai.GenerativeModel('gemini-1.5-flash', safety_settings=safety)
+        print(f"❌ Error configuración IA: {e}")
+        return None
 
 model = configurar_modelo()
 
 # --- BÚSQUEDA WEB ---
 def buscar_en_web(consulta, max_results=3):
     try:
+        print(f"🌍 Buscando: {consulta}")
         with DDGS() as ddgs:
             results = list(ddgs.text(consulta, max_results=max_results))
-        if not results: return "Sin resultados web."
+        
+        if not results: return "ERROR_BUSQUEDA: No se obtuvieron resultados (posible bloqueo)."
+        
         texto = ""
         for i, r in enumerate(results):
-            texto += f"WEB {i+1}: {r['title']} - {r['body']}\n"
+            texto += f"- {r['title']}: {r['body']} (Fuente: {r['href']})\n"
         return texto
-    except:
-        return "No se pudo buscar en web."
+    except Exception as e:
+        print(f"⚠️ Error Web Search: {e}")
+        return f"ERROR_BUSQUEDA: Falló la conexión ({str(e)})."
 
 # --- ENLACES ---
 URL_BITACORA = "https://docs.google.com/spreadsheets/d/e/2PACX-1vR0-Uk3fi9iIO1XHja2j3nFlcy4NofCDsjzPh69-4D1jJkDUwq7E5qY1S201_e_0ODIk5WksS_ezYHi/pub?gid=643804140&single=true&output=csv"
@@ -97,8 +90,7 @@ def cargar_csv(url):
         df = pd.read_csv(io.BytesIO(response.content), encoding='utf-8')
         df = df.fillna("")
         return df
-    except:
-        return None
+    except: return None
 
 @app.get("/")
 def home():
@@ -106,17 +98,14 @@ def home():
 
 @app.get("/api/dashboard")
 def get_dashboard_data():
-    # (Lógica igual)
+    # (Lógica dashboard igual...)
     df_bitacora = cargar_csv(URL_BITACORA)
     datos_bitacora = df_bitacora.to_dict(orient="records") if df_bitacora is not None else []
     df_ventas = cargar_csv(URL_VENTAS)
     datos_ventas_crudos = df_ventas.to_dict(orient="records") if df_ventas is not None else []
-    # ... lógica de tendencia simplificada para brevedad ...
-    datos_tendencia = []
+    datos_tendencia = [] 
     if df_ventas is not None:
-        # ... (tu lógica original de pandas aquí) ...
-        pass 
-    
+        pass # Simplificado
     df_nueva = cargar_csv(URL_NUEVA)
     datos_nueva_tabla = df_nueva.to_dict(orient="records") if df_nueva is not None else []
     df_cal = cargar_csv(URL_CALENDARIO)
@@ -132,8 +121,7 @@ async def chat_con_datos(pregunta: str = Form(...), file: UploadFile = File(None
     global model
     if not model:
         model = configurar_modelo()
-        if not model:
-            return {"respuesta": "❌ Error: No se pudo encontrar un modelo válido en tu cuenta."}
+        if not model: return {"respuesta": "❌ Error IA: No disponible."}
 
     df_ventas = cargar_csv(URL_VENTAS)
     df_extra = cargar_csv(URL_NUEVA)
@@ -146,25 +134,38 @@ async def chat_con_datos(pregunta: str = Form(...), file: UploadFile = File(None
             for page in reader.pages: texto_pdf += page.extract_text()
         except: pass
 
+    # Intentar búsqueda web
     info_web = buscar_en_web(pregunta)
 
-    # Contexto sin límites (.head) para que lea todo
-    contexto = f"""Eres un asistente experto.
+    # --- CONTEXTO ÉTICO ANTI-ALUCINACIÓN ---
+    contexto = f"""Eres un asistente experto del MinCYT.
     
-    1. BÚSQUEDA WEB (Actualidad):
+    ESTADO DE LA BÚSQUEDA WEB:
     {info_web}
     
-    2. DATOS INTERNOS (CSV):
-    -- Ventas: {df_ventas.to_csv(index=False) if df_ventas is not None else 'N/A'}
+    DATOS INTERNOS (CSV):
+    -- Ventas: {df_ventas.tail(50).to_csv(index=False) if df_ventas is not None else 'N/A'}
     -- Extra: {df_extra.to_csv(index=False) if df_extra is not None else 'N/A'}
     
-    3. PDF ADJUNTO:
+    PDF ADJUNTO:
     {texto_pdf[:30000]}
     
-    PREGUNTA: {pregunta}"""
+    PREGUNTA: {pregunta}
+    
+    REGLAS DE RESPUESTA OBLIGATORIAS:
+    1. DATOS INTERNOS: Úsalos siempre que la pregunta sea sobre gestión, proyectos o presupuesto del ministerio.
+    
+    2. DATOS EXTERNOS (Web):
+       - Si 'ESTADO DE LA BÚSQUEDA WEB' contiene resultados reales, úsalos para responder.
+       - Si dice 'ERROR_BUSQUEDA' o no hay resultados útiles:
+         A) Si preguntan por un DATO DINÁMICO (ej: precio bitcoin hoy, clima ahora, noticia de ayer), DI CLARAMENTE: "No puedo acceder a internet en este momento para darte el dato en tiempo real". NO INVENTES UN VALOR.
+         B) Si preguntan por CONOCIMIENTO GENERAL ESTÁTICO (ej: qué es bitcoin, quién fue Einstein, historia), responde con tu conocimiento base.
+    
+    3. NO ALUCINES FECHAS NI MONTOS si no están en los CSV o en la Web.
+    """
 
     try:
         response = model.generate_content(contexto)
         return {"respuesta": response.text}
     except Exception as e:
-        return {"respuesta": f"Error IA ({modelo_nombre_final}): {e}"}
+        return {"respuesta": f"Error IA: {e}"}
