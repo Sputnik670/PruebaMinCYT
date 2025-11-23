@@ -43,7 +43,9 @@ def configurar_modelo():
         HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_ONLY_HIGH,
     }
 
-    candidatos = ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-1.0-pro']
+    # Intentamos conectar con el mejor modelo disponible
+    # Agregamos 'gemini-pro' al final como respaldo seguro
+    candidatos = ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-1.0-pro', 'gemini-pro']
     
     for nombre in candidatos:
         try:
