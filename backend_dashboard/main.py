@@ -8,7 +8,8 @@ from google.generativeai.types import HarmCategory, HarmBlockThreshold
 import os
 import pypdf
 from tavily import TavilyClient
-from tabulate import tabulate # Librería para tablas markdown
+from tabulate import tabulate
+import sys
 
 app = FastAPI()
 
@@ -27,15 +28,22 @@ TAVILY_API_KEY = os.environ.get("TAVILY_API_KEY")
 model = None
 tavily_client = None
 
-# --- CONFIGURACIÓN IA (GEMINI - VERSIÓN ROBUSTA) ---
+# --- CONFIGURACIÓN IA (ENFOQUE DINÁMICO) ---
 def configurar_modelo():
+    print(f"📦 VERSIÓN DE PYTHON: {sys.version}")
+    try:
+        print(f"📦 VERSIÓN DE GOOGLE-GENAI: {genai.__version__}")
+    except:
+        print("📦 VERSIÓN DE GOOGLE-GENAI: (No se pudo determinar)")
+
     if not GEMINI_API_KEY:
-        print("⚠️ Error Crítico: Falta GEMINI_API_KEY.")
+        print("⚠️ Error: Falta GEMINI_API_KEY.")
         return None
 
     try:
         genai.configure(api_key=GEMINI_API_KEY)
         
+        # Configuración de seguridad
         safety = {
             HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_ONLY_HIGH,
             HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_ONLY_HIGH,
@@ -43,36 +51,47 @@ def configurar_modelo():
             HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_ONLY_HIGH,
         }
 
-        # 1. Diagnóstico: Listar qué ve la API realmente
-        print("🔍 Iniciando conexión con IA...")
-        candidatos = [
-            'gemini-1.5-flash',
-            'gemini-1.5-pro',
-            'gemini-1.0-pro',
-            'gemini-pro'
-        ]
-
-        # Intento de conexión iterativo
-        for nombre in candidatos:
-            try:
-                print(f"🧪 Probando modelo: {nombre}...")
-                m = genai.GenerativeModel(nombre, safety_settings=safety)
-                # Prueba de fuego: Generar un token
-                m.generate_content("Ping")
-                print(f"✅ IA Conectada exitosamente con: {nombre}")
-                return m
-            except Exception as e:
-                print(f"   ❌ Falló {nombre}: {e}")
-                continue
+        print("🔍 PREGUNTANDO A GOOGLE QUÉ MODELOS TENEMOS DISPONIBLES...")
         
-        print("💀 Fallaron todos los intentos de conexión con Gemini.")
-        return None
+        modelo_elegido = None
+        
+        # 1. Listar modelos reales disponibles para tu API Key
+        try:
+            for m in genai.list_models():
+                if 'generateContent' in m.supported_generation_methods:
+                    nombre = m.name
+                    print(f"   - Disponible: {nombre}")
+                    
+                    # Prioridad: Flash > Pro 1.5 > Pro 1.0
+                    if 'flash' in nombre and '1.5' in nombre:
+                        modelo_elegido = nombre
+                    elif 'pro' in nombre and '1.5' in nombre and not modelo_elegido:
+                        modelo_elegido = nombre
+                    elif 'gemini-pro' in nombre and not modelo_elegido:
+                        modelo_elegido = nombre
+        except Exception as e:
+            print(f"⚠️ Error listando modelos (Posible error de API Key o Región): {e}")
+
+        # 2. Si no encontramos nada en la lista (raro), probamos el fallback
+        if not modelo_elegido:
+            print("⚠️ No se encontró modelo preferido en la lista. Usando 'gemini-1.5-flash' a ciegas.")
+            modelo_elegido = 'gemini-1.5-flash'
+        
+        print(f"🎯 INTENTANDO CONECTAR CON: {modelo_elegido}")
+        
+        try:
+            m = genai.GenerativeModel(modelo_elegido, safety_settings=safety)
+            response = m.generate_content("Hola")
+            print(f"✅ ¡CONEXIÓN EXITOSA CON {modelo_elegido}!")
+            return m
+        except Exception as e:
+            print(f"❌ Falló la conexión final con {modelo_elegido}: {e}")
+            return None
 
     except Exception as e:
-        print(f"⚠️ Error fatal configurando IA: {e}")
+        print(f"💀 Error fatal en configuración: {e}")
         return None
 
-# Inicializamos el modelo
 model = configurar_modelo()
 
 # --- TAVILY ---
@@ -122,15 +141,14 @@ def get_dashboard_data():
 @app.post("/api/chat")
 async def chat_con_datos(pregunta: str = Form(...), file: UploadFile = File(None)):
     global model
-    # Reintento de conexión si se cayó
     if not model: 
         print("🔄 Reintentando conexión con IA...")
         model = configurar_modelo()
     
     if not model: 
-        return {"respuesta": "❌ Error Crítico: El sistema no puede conectar con la IA de Google. Por favor revisa los logs del servidor."}
+        return {"respuesta": "❌ Error Crítico: No hay conexión con Gemini. Revisa los logs en Render."}
 
-    # 1. Contexto CSV
+    # Contexto
     df_ventas = cargar_csv(URL_VENTAS)
     df_bitacora = cargar_csv(URL_BITACORA)
     df_calendario = cargar_csv(URL_CALENDARIO)
@@ -143,43 +161,34 @@ async def chat_con_datos(pregunta: str = Form(...), file: UploadFile = File(None
             contexto_csv += f"\n### 💰 VENTAS:\n{df_ventas.tail(20).to_markdown(index=False)}\n"
         if df_bitacora is not None and not df_bitacora.empty:
             contexto_csv += f"\n### ⏱️ BITÁCORA:\n{df_bitacora.head(20).to_markdown(index=False)}\n"
-    except Exception as e:
-        print(f"Error formateando tablas: {e}")
-        contexto_csv += "\n(Error al procesar las tablas de datos)\n"
+    except:
+        contexto_csv += "\n(Datos internos no disponibles)\n"
 
-    # 2. PDF
     texto_pdf = ""
     if file:
         try:
             content = await file.read()
             pdf = pypdf.PdfReader(io.BytesIO(content))
             texto_pdf = "\n### 📄 PDF ADJUNTO:\n"
-            for p in pdf.pages[:10]: 
-                texto_pdf += p.extract_text() + "\n"
+            for p in pdf.pages[:10]: texto_pdf += p.extract_text() + "\n"
         except: pass
 
-    # 3. Web
     info_web = buscar_en_web(pregunta)
 
-    # 4. Prompt
     prompt = f"""
-    Eres el Asistente MinCYT. Fuentes:
+    Eres el Asistente Inteligente del MinCYT.
     
-    1. [INTERNO] TABLAS DE DATOS:
+    FUENTES DE INFORMACIÓN:
+    1. [INTERNO] DASHBOARD (Prioridad ALTA para datos del ministerio):
     {contexto_csv}
     
-    2. [ARCHIVO] PDF ADJUNTO:
+    2. [ARCHIVO] PDF (Prioridad ALTA si el usuario pregunta por el archivo):
     {texto_pdf}
     
-    3. [EXTERNO] INTERNET:
+    3. [WEB] INTERNET (Prioridad ALTA para actualidad y deportes):
     {info_web}
     
-    CONSULTA: "{pregunta}"
-    
-    INSTRUCCIONES:
-    - Busca primero en [INTERNO] para fechas, proyectos y ventas.
-    - Usa [EXTERNO] solo para noticias o deportes.
-    - Responde directo y conciso.
+    PREGUNTA: "{pregunta}"
     """
 
     try:
