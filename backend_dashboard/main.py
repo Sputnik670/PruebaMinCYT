@@ -3,9 +3,10 @@ from fastapi import FastAPI, HTTPException, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 import io
 import requests
+import google.generativeai as genai
+from google.generativeai.types import HarmCategory, HarmBlockThreshold
 import os
 import pypdf
-import json
 
 app = FastAPI()
 
@@ -17,45 +18,71 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- CONFIGURACIÓN ---
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+model = None
+active_model_name = "Ninguno"
 
-# --- FUNCIÓN DE LLAMADA DIRECTA A GOOGLE (SIN LIBRERÍA) ---
-def consultar_gemini_directo(prompt):
+def configurar_modelo():
+    global active_model_name
     if not GEMINI_API_KEY:
-        return "⚠️ Error: No se encontró la API Key en las variables de entorno."
+        print("⚠️ Sin API Key")
+        return None
 
-    # Usamos el endpoint REST estándar de Gemini 1.5 Flash
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
+    genai.configure(api_key=GEMINI_API_KEY)
     
-    headers = {"Content-Type": "application/json"}
-    
-    # Estructura del mensaje JSON que exige Google
-    payload = {
-        "contents": [{
-            "parts": [{"text": prompt}]
-        }]
+    safety = {
+        HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_ONLY_HIGH,
+        HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_ONLY_HIGH,
+        HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_ONLY_HIGH,
+        HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_ONLY_HIGH,
     }
-    
-    try:
-        response = requests.post(url, headers=headers, json=payload)
-        
-        if response.status_code == 200:
-            # Si todo salió bien, extraemos el texto de la respuesta
-            data = response.json()
-            try:
-                texto_respuesta = data['candidates'][0]['content']['parts'][0]['text']
-                return texto_respuesta
-            except (KeyError, IndexError):
-                return "La IA respondió pero no se pudo leer el mensaje (Formato inesperado)."
-        else:
-            # Si hay error (400, 403, 404, 500), lo mostramos tal cual
-            return f"❌ Error de Google ({response.status_code}): {response.text}"
-            
-    except Exception as e:
-        return f"❌ Error de conexión: {str(e)}"
 
-# --- TUS ENLACES ---
+    # LISTA MAESTRA DE CANDIDATOS
+    # Probamos desde lo más nuevo hasta lo más viejo/experimental
+    candidatos = [
+        'gemini-1.5-flash',
+        'gemini-1.5-flash-latest',
+        'gemini-1.5-pro',
+        'gemini-1.5-pro-latest',
+        'gemini-1.0-pro',
+        'gemini-pro',
+        'models/gemini-1.5-flash',
+        'models/gemini-pro',
+        'gemini-pro-vision' # A veces este acepta texto también
+    ]
+
+    print("🔄 Iniciando escaneo de modelos...")
+
+    # INTENTO 1: Listar lo que Google dice que tenemos
+    try:
+        available = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+        print(f"📋 Google dice que tienes: {available}")
+        # Si la lista no está vacía, probamos esos primero
+        candidatos = available + candidatos 
+    except Exception as e:
+        print(f"⚠️ No se pudo listar modelos: {e}")
+
+    # INTENTO 2: Probar uno por uno
+    for nombre in candidatos:
+        # Limpiamos el nombre por si viene con 'models/' duplicado
+        clean_name = nombre if not nombre.startswith('models/') else nombre
+        
+        try:
+            print(f"🧪 Probando: {clean_name}")
+            m = genai.GenerativeModel(clean_name, safety_settings=safety)
+            m.generate_content("Test")
+            print(f"✅ ¡CONECTADO! Ganador: {clean_name}")
+            active_model_name = clean_name
+            return m
+        except Exception as e:
+            print(f"❌ Falló {clean_name}: {e}")
+            continue
+            
+    return None
+
+model = configurar_modelo()
+
+# --- ENLACES ---
 URL_BITACORA = "https://docs.google.com/spreadsheets/d/e/2PACX-1vR0-Uk3fi9iIO1XHja2j3nFlcy4NofCDsjzPh69-4D1jJkDUwq7E5qY1S201_e_0ODIk5WksS_ezYHi/pub?gid=643804140&single=true&output=csv"
 URL_VENTAS = "https://docs.google.com/spreadsheets/d/e/2PACX-1vR0-Uk3fi9iIO1XHja2j3nFlcy4NofCDsjzPh69-4D1jJkDUwq7E5qY1S201_e_0ODIk5WksS_ezYHi/pub?gid=0&single=true&output=csv"
 URL_NUEVA = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQiN48tufdUP4BDXv7cVrh80OI8Li2KqjXQ-4LalIFCJ9ZnMYHr3R4PvSrPDUsk_g/pub?output=csv"
@@ -80,11 +107,11 @@ def cargar_csv(url):
 
 @app.get("/")
 def home():
-    return {"status": "online", "mensaje": "Backend V19 - Direct REST API"}
+    return {"status": "online", "modelo_ia": active_model_name}
 
 @app.get("/api/dashboard")
 def get_dashboard_data():
-    # (Lógica de siempre...)
+    # (Lógica intacta)
     df_bitacora = cargar_csv(URL_BITACORA)
     datos_bitacora = df_bitacora.to_dict(orient="records") if df_bitacora is not None else []
 
@@ -126,16 +153,20 @@ async def chat_con_datos(
     pregunta: str = Form(...), 
     file: UploadFile = File(None)
 ):
-    # Cargar datos
+    global model
+    if not model:
+        # Ultimo intento al vuelo
+        model = configurar_modelo()
+        if not model:
+            return {"respuesta": "❌ Error: Ningún modelo de IA compatible encontrado."}
+
     df_ventas = cargar_csv(URL_VENTAS)
     df_extra = cargar_csv(URL_NUEVA)
     df_bitacora = cargar_csv(URL_BITACORA)
     
     texto_pdf = ""
-    nombre_archivo = ""
     if file:
         try:
-            nombre_archivo = file.filename
             content = await file.read()
             pdf_file = io.BytesIO(content)
             reader = pypdf.PdfReader(pdf_file)
@@ -144,28 +175,22 @@ async def chat_con_datos(
         except Exception as e:
             texto_pdf = f"Error PDF: {e}"
 
-    # Armar el Prompt Gigante
-    contexto = f"""Eres un asistente experto del MinCYT.
+    contexto = f"""Eres un asistente del MinCYT.
     
-    DATOS DISPONIBLES:
-    
+    DATOS:
     1. VENTAS:
-    {df_ventas.tail(100).to_csv(index=False) if df_ventas is not None else 'No disponible'}
+    {df_ventas.tail(50).to_csv(index=False) if df_ventas is not None else 'N/A'}
     
     2. EXTRA:
-    {df_extra.to_csv(index=False) if df_extra is not None else 'No disponible'}
+    {df_extra.to_csv(index=False) if df_extra is not None else 'N/A'}
     
-    3. BITACORA:
-    {df_bitacora.head(50).to_csv(index=False) if df_bitacora is not None else 'No disponible'}
+    3. PDF:
+    {texto_pdf[:10000] if texto_pdf else 'Ninguno'}
+    
+    PREGUNTA: {pregunta}"""
 
-    4. PDF ADJUNTO ({nombre_archivo}):
-    {texto_pdf[:30000] if texto_pdf else 'Ninguno'}
-    
-    PREGUNTA DEL USUARIO: {pregunta}
-    
-    RESPUESTA:"""
-
-    # LLAMADA DIRECTA (Sin librerías intermediarias)
-    respuesta_ia = consultar_gemini_directo(contexto)
-    
-    return {"respuesta": respuesta_ia}
+    try:
+        response = model.generate_content(contexto)
+        return {"respuesta": response.text}
+    except Exception as e:
+        return {"respuesta": f"Error IA: {e}"}
