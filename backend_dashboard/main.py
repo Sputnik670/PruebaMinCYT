@@ -2,16 +2,15 @@ import pandas as pd
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 import io
-import requests
+import os
 import google.generativeai as genai
 from google.generativeai.types import HarmCategory, HarmBlockThreshold
-import os
 import pypdf
 from tavily import TavilyClient
+from tabulate import tabulate 
+from supabase import create_client, Client
 import sys
-import time  # <--- NUEVO: Para medir el tiempo del caché
 
-# --- INICIALIZACIÓN APP ---
 app = FastAPI()
 
 app.add_middleware(
@@ -22,97 +21,87 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- VARIABLES ---
+# --- VARIABLES DE ENTORNO ---
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 TAVILY_API_KEY = os.environ.get("TAVILY_API_KEY")
+SUPABASE_URL = os.environ.get("SUPABASE_URL")
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 
-URLS = {
-    "VENTAS": "https://docs.google.com/spreadsheets/d/e/2PACX-1vR0-Uk3fi9iIO1XHja2j3nFlcy4NofCDsjzPh69-4D1jJkDUwq7E5qY1S201_e_0ODIk5WksS_ezYHi/pub?gid=0&single=true&output=csv",
-    "BITACORA": "https://docs.google.com/spreadsheets/d/e/2PACX-1vR0-Uk3fi9iIO1XHja2j3nFlcy4NofCDsjzPh69-4D1jJkDUwq7E5qY1S201_e_0ODIk5WksS_ezYHi/pub?gid=643804140&single=true&output=csv",
-    "CALENDARIO": "https://docs.google.com/spreadsheets/d/e/2PACX-1vQiN48tufdUP4BDXv7cVrh80OI8Li2KqjXQ-4LalIFCJ9ZnMYHr3R4PvSrPDUsk_g/pub?output=csv"
-}
-
-# --- SISTEMA DE CACHÉ (NUEVO) ---
-# Guardaremos los datos aquí para no descargarlos en cada click
-CACHE_DATOS = {
-    "dashboard_texto": "",
-    "ultimo_update": 0
-}
-TIEMPO_CACHE_SEGUNDOS = 300  # 5 Minutos de memoria (ajustable)
+# --- CONEXIÓN SUPABASE ---
+supabase: Client = None
+if SUPABASE_URL and SUPABASE_KEY:
+    try:
+        supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+        print("✅ Base de Datos Supabase: CONECTADA")
+    except Exception as e:
+        print(f"❌ Error conectando Supabase: {e}")
 
 # --- IA ---
-def obtener_modelo_gemini():
-    if not GEMINI_API_KEY: return None
+model = None
+if GEMINI_API_KEY:
+    genai.configure(api_key=GEMINI_API_KEY)
+    safety = {
+        HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_ONLY_HIGH,
+        HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_ONLY_HIGH,
+        HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_ONLY_HIGH,
+        HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_ONLY_HIGH,
+    }
+    candidatos = ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-pro']
+    for nombre in candidatos:
+        try:
+            model = genai.GenerativeModel(nombre, safety_settings=safety)
+            break
+        except: continue
+
+# --- FUNCIONES DE BASE DE DATOS ---
+def obtener_datos_tabla(nombre_tabla, limite=50):
+    """Trae datos de Supabase en lugar de CSV."""
+    if not supabase: return pd.DataFrame()
     try:
-        genai.configure(api_key=GEMINI_API_KEY)
-        safety = {
-            HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_ONLY_HIGH,
-            HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_ONLY_HIGH,
-            HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_ONLY_HIGH,
-            HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_ONLY_HIGH,
-        }
-        # Lista simplificada para conexión rápida
-        candidatos = ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-pro']
-        for nombre in candidatos:
-            try:
-                return genai.GenerativeModel(nombre, safety_settings=safety)
-            except: continue
-        return None
-    except: return None
+        response = supabase.table(nombre_tabla).select("*").limit(limite).execute()
+        if response.data:
+            return pd.DataFrame(response.data)
+        return pd.DataFrame()
+    except Exception as e:
+        print(f"⚠️ Error tabla {nombre_tabla}: {e}")
+        return pd.DataFrame()
 
-model = obtener_modelo_gemini()
-
-# --- DATOS ---
-def descargar_csv(url):
+def guardar_historial(pregunta, respuesta, fuente):
+    """Guarda la conversación."""
+    if not supabase: return
     try:
-        if not url or "TU_LINK" in url: return None
-        # Timeout corto (3s) para no bloquear si Google tarda
-        r = requests.get(url, timeout=3) 
-        r.raise_for_status()
-        return pd.read_csv(io.BytesIO(r.content), encoding='utf-8').fillna("")
-    except: return None
+        supabase.table("historial_chat").insert({
+            "pregunta": pregunta,
+            "respuesta": respuesta,
+            "fuente_usada": fuente
+        }).execute()
+    except: pass
 
-def obtener_contexto_dashboard_optimizado():
-    """Descarga datos SOLO si pasaron más de 5 minutos o está vacío."""
-    global CACHE_DATOS
-    ahora = time.time()
-    
-    # Si tenemos datos y son frescos (menos de 5 min), úsalos.
-    if CACHE_DATOS["dashboard_texto"] and (ahora - CACHE_DATOS["ultimo_update"] < TIEMPO_CACHE_SEGUNDOS):
-        print("⚡ Usando datos de CACHÉ (Rápido)")
-        return CACHE_DATOS["dashboard_texto"]
-
-    print("🐢 Descargando datos nuevos de Google Sheets...")
+# --- CONTEXTO ---
+def obtener_contexto_dashboard():
     texto = ""
+    # Calendario
+    df_cal = obtener_datos_tabla("calendario")
+    if not df_cal.empty:
+        texto += f"\n### 📅 CALENDARIO:\n{df_cal.to_markdown(index=False)}\n"
+    # Ventas
+    df_ven = obtener_datos_tabla("ventas")
+    if not df_ven.empty:
+        texto += f"\n### 💰 VENTAS:\n{df_ven.tail(15).to_markdown(index=False)}\n"
+    # Bitácora
+    df_bit = obtener_datos_tabla("bitacora")
+    if not df_bit.empty:
+        texto += f"\n### ⏱️ BITÁCORA:\n{df_bit.head(15).to_markdown(index=False)}\n"
     
-    # Descargas
-    df_cal = descargar_csv(URLS["CALENDARIO"])
-    df_ventas = descargar_csv(URLS["VENTAS"])
-    df_bit = descargar_csv(URLS["BITACORA"])
-    
-    # Formateo
-    if df_cal is not None and not df_cal.empty:
-        texto += f"\n### 📅 CALENDARIO Y PROYECTOS:\n{df_cal.to_markdown(index=False)}\n"
-    if df_ventas is not None and not df_ventas.empty:
-        texto += f"\n### 💰 VENTAS RECIENTES:\n{df_ventas.tail(20).to_markdown(index=False)}\n"
-    if df_bit is not None and not df_bit.empty:
-        texto += f"\n### ⏱️ BITÁCORA DE TAREAS:\n{df_bit.head(20).to_markdown(index=False)}\n"
+    return texto if texto else "(Sin datos DB)"
 
-    if not texto: texto = "(Datos no disponibles)"
-
-    # Actualizar Caché
-    CACHE_DATOS["dashboard_texto"] = texto
-    CACHE_DATOS["ultimo_update"] = ahora
-    return texto
-
-# --- PDF & WEB ---
 async def obtener_contexto_pdf(file: UploadFile):
     if not file: return ""
     try:
         content = await file.read()
         pdf = pypdf.PdfReader(io.BytesIO(content))
         txt = f"\n### 📄 PDF ({file.filename}):\n"
-        for p in pdf.pages[:5]: txt += p.extract_text() + "\n" # Solo 5 pags para velocidad
+        for p in pdf.pages[:5]: txt += p.extract_text() + "\n"
         return txt
     except: return ""
 
@@ -120,7 +109,6 @@ def obtener_contexto_web(consulta):
     if not TAVILY_API_KEY: return ""
     try:
         tavily = TavilyClient(api_key=TAVILY_API_KEY)
-        # Search depth basic es 3x más rápido que advanced
         resp = tavily.search(query=consulta, search_depth="basic", max_results=3)
         txt = "\n### 🌍 INTERNET:\n"
         for r in resp.get('results', []): txt += f"- {r.get('title')}: {r.get('content')}\n"
@@ -130,46 +118,45 @@ def obtener_contexto_web(consulta):
 # --- ENDPOINTS ---
 @app.get("/api/dashboard")
 def get_dashboard_data():
-    # Este endpoint sigue descargando en vivo para que los gráficos sean realtime
+    # Convierte la data de Supabase a JSON para el frontend
     return {
-        "bitacora": descargar_csv(URLS["BITACORA"]).to_dict(orient="records") if descargar_csv(URLS["BITACORA"]) is not None else [],
-        "ventas_tabla": descargar_csv(URLS["VENTAS"]).to_dict(orient="records") if descargar_csv(URLS["VENTAS"]) is not None else [],
-        "extra_tabla": descargar_csv(URLS["CALENDARIO"]).to_dict(orient="records") if descargar_csv(URLS["CALENDARIO"]) is not None else [],
-        "tendencia_grafico": []
+        "bitacora": obtener_datos_tabla("bitacora").to_dict(orient="records"),
+        "ventas_tabla": obtener_datos_tabla("ventas").to_dict(orient="records"),
+        "extra_tabla": obtener_datos_tabla("calendario").to_dict(orient="records"),
+        "tendencia_grafico": [] 
     }
 
 @app.post("/api/chat")
 async def chat_endpoint(pregunta: str = Form(...), file: UploadFile = File(None)):
-    global model
-    if not model: model = obtener_modelo_gemini()
-    if not model: return {"respuesta": "Error de conexión IA."}
+    if not model: return {"respuesta": "Error IA"}
 
-    # Usamos la función optimizada con caché
-    contexto_dash = obtener_contexto_dashboard_optimizado()
-    contexto_pdf = await obtener_contexto_pdf(file)
+    ctx_dash = obtener_contexto_dashboard()
+    ctx_pdf = await obtener_contexto_pdf(file)
+    ctx_web = obtener_contexto_web(pregunta)
     
-    # Solo buscamos en web si la pregunta parece requerirlo (palabras clave) para ahorrar tiempo
-    # O buscamos siempre pero con modo "basic" (ya configurado arriba)
-    contexto_web = obtener_contexto_web(pregunta)
+    # Detectar fuente para el log
+    fuente = "General"
+    if "Sin datos" not in ctx_dash: fuente = "DB"
+    if ctx_pdf: fuente = "PDF"
+    if "INTERNET" in ctx_web: fuente += "+Web"
 
     prompt = f"""
-    Eres el Asistente MinCYT. Responde rápido y conciso.
+    Eres el Asistente MinCYT con acceso a Base de Datos en vivo.
     
-    FUENTES:
-    1. DASHBOARD (Interno):
-    {contexto_dash}
-    
-    2. PDF:
-    {contexto_pdf}
-    
-    3. INTERNET:
-    {contexto_web}
+    1. [DB] DATOS INTERNOS:
+    {ctx_dash}
+    2. [PDF] ADJUNTO:
+    {ctx_pdf}
+    3. [WEB] INTERNET:
+    {ctx_web}
     
     PREGUNTA: "{pregunta}"
     """
 
     try:
         res = model.generate_content(prompt)
+        # Guardamos en Supabase
+        guardar_historial(pregunta, res.text, fuente)
         return {"respuesta": res.text}
     except Exception as e:
-        return {"respuesta": f"Error: {str(e)}"}
+        return {"respuesta": f"Error: {e}"}
