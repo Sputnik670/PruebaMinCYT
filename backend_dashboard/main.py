@@ -21,7 +21,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- CONFIGURACIÓN ---
+# --- VARIABLES ---
 OPENROUTER_API_KEY = os.environ.get("GEMINI_API_KEY") 
 TAVILY_API_KEY = os.environ.get("TAVILY_API_KEY")
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
@@ -36,13 +36,12 @@ if SUPABASE_URL and SUPABASE_KEY:
 
 client_ia = None
 if OPENROUTER_API_KEY:
-    # Cliente estándar OpenAI apuntando a OpenRouter
     client_ia = OpenAI(
         base_url="https://openrouter.ai/api/v1",
         api_key=OPENROUTER_API_KEY,
     )
 
-# --- 1. SINCRONIZACIÓN ---
+# --- SINCRONIZACIÓN ---
 @app.post("/api/sync")
 def sincronizar_datos():
     if not supabase: return {"status": "error", "msg": "Falta conexión DB"}
@@ -78,19 +77,19 @@ def sincronizar_datos():
     except Exception as e:
         return {"status": "error", "msg": f"Error: {str(e)}"}
 
-# --- 2. DATOS ---
+# --- DATOS ---
 @app.get("/api/data")
 def obtener_datos():
     if not supabase: return []
     try: return supabase.table("calendario_internacional").select("*").order("fecha_inicio", desc=False).execute().data
     except: return []
 
-# --- 3. CHATBOT (CEREBRO) ---
+# --- CHATBOT (CEREBRO MULTI-MODELO) ---
 @app.post("/api/chat")
 async def chat_endpoint(pregunta: str = Form(...), file: UploadFile = File(None)):
     if not client_ia: return {"respuesta": "❌ Error: Sistema de IA desconectado."}
 
-    # Recopilar Contexto
+    # Contextos
     ctx_db = "(Sin datos)"
     try:
         data = obtener_datos()
@@ -116,27 +115,29 @@ async def chat_endpoint(pregunta: str = Form(...), file: UploadFile = File(None)
     # Prompt
     sistema = """Eres el Asistente Inteligente del MinCYT.
     FUENTES:
-    1. [DB] CALENDARIO OFICIAL: Verdad absoluta para eventos/viajes.
-    2. [WEB] INTERNET: Para noticias, deportes y actualidad.
-    3. [PDF] DOCUMENTO: Si el usuario sube uno.
+    1. [DB] CALENDARIO OFICIAL: Verdad absoluta.
+    2. [WEB] INTERNET: Noticias y actualidad.
+    3. [PDF] DOCUMENTO: Archivo adjunto.
     
     INSTRUCCIONES:
-    - Si la respuesta está en el Calendario, úsalo.
-    - Si no, busca en Internet.
+    - Prioriza el CALENDARIO para eventos.
+    - Usa INTERNET para todo lo demás.
     """
     
     usuario = f"DATOS: {ctx_db}\nWEB: {ctx_web}\nPDF: {ctx_pdf}\nPREGUNTA: {pregunta}"
 
-    # LISTA ROBUSTA DE MODELOS (Orden de prioridad)
-    modelos = [
-        "google/gemini-flash-1.5",       # El más estable y rápido
-        "google/gemini-pro-1.5",         # El más potente
-        "google/gemini-2.0-flash-exp:free" # El nuevo (experimental, puede fallar)
+    # LISTA ESTRATÉGICA DE MODELOS (Mix de Proveedores para evitar saturación)
+    modelos_a_probar = [
+        "google/gemini-2.0-flash-exp:free",       # Opción 1: Google Rápido (Si no está saturado)
+        "meta-llama/llama-3-70b-instruct:free",   # Opción 2: Meta Llama 3 (Muy potente y estable)
+        "microsoft/phi-3-medium-128k-instruct:free", # Opción 3: Microsoft (Backup ligero)
+        "google/gemini-flash-1.5"                 # Opción 4: El clásico (A veces falla en free)
     ]
     
-    for modelo in modelos:
+    errores = []
+    for modelo in modelos_a_probar:
         try:
-            print(f"🤖 Intentando con {modelo}...")
+            print(f"🤖 Intentando conectar con {modelo}...")
             completion = client_ia.chat.completions.create(
                 model=modelo,
                 messages=[{"role": "system", "content": sistema}, {"role": "user", "content": usuario}],
@@ -145,6 +146,7 @@ async def chat_endpoint(pregunta: str = Form(...), file: UploadFile = File(None)
             return {"respuesta": completion.choices[0].message.content}
         except Exception as e:
             print(f"⚠️ Falló {modelo}: {e}")
+            errores.append(f"{modelo}: {str(e)}")
             continue
             
-    return {"respuesta": "⚠️ El servicio de inteligencia está saturado momentáneamente. Por favor, intenta tu pregunta de nuevo en unos segundos."}
+    return {"respuesta": f"❌ Todos los servicios de IA están saturados. Detalles: {'; '.join(errores)}"}
