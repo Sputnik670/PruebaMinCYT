@@ -30,62 +30,80 @@ SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 
 URL_CALENDARIO = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQiN48tufdUP4BDXv7cVrh80OI8Li2KqjXQ-4LalIFCJ9ZnMYHr3R4PvSrPDUsk_g/pub?output=csv"
 
-# --- CONEXIÓN SUPABASE ---
+# --- CONEXIONES ---
 supabase: Client = None
 if SUPABASE_URL and SUPABASE_KEY:
     try: supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
     except: pass
 
-# --- CONFIGURACIÓN IA (CON DIAGNÓSTICO) ---
+# --- CONFIGURACIÓN IA INTELIGENTE (AUTO-DESCUBRIMIENTO) ---
 model = None
-last_error = "Iniciando..." # Variable para guardar el error y mostrarlo en el chat
+last_error = "Iniciando..."
 
 def configurar_modelo():
     global last_error
     if not GEMINI_API_KEY:
-        last_error = "Falta la GEMINI_API_KEY en las variables de entorno."
-        print(f"⚠️ {last_error}")
+        last_error = "Falta GEMINI_API_KEY."
         return None
 
     try:
         genai.configure(api_key=GEMINI_API_KEY)
         safety = {HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_ONLY_HIGH}
 
-        # Intentamos con varios nombres por si acaso
-        candidatos = [
-            'gemini-1.5-flash',
-            'gemini-1.5-pro',
-            'gemini-pro',
-            'models/gemini-1.5-flash'
-        ]
+        # PASO 1: Preguntar a Google qué modelos tiene esta API KEY
+        print("🔍 Consultando lista de modelos disponibles a Google...")
+        modelos_disponibles = []
+        try:
+            for m in genai.list_models():
+                if 'generateContent' in m.supported_generation_methods:
+                    modelos_disponibles.append(m.name)
+            print(f"📋 Modelos encontrados: {modelos_disponibles}")
+        except Exception as e:
+            print(f"⚠️ No se pudo listar modelos: {e}")
 
-        errores_acumulados = []
+        # PASO 2: Crear lista de candidatos (Priorizando los encontrados)
+        candidatos = []
+        
+        # Si encontramos modelos reales, los ponemos primero en la lista
+        if modelos_disponibles:
+            # Preferimos Flash o Pro si existen
+            for m in modelos_disponibles:
+                if 'flash' in m: candidates_priority = 0
+                elif 'pro' in m: candidates_priority = 1
+                else: candidates_priority = 2
+                candidatos.append((candidates_priority, m))
+            candidatos.sort() # Ordenar por prioridad
+            candidatos = [x[1] for x in candidatos] # Quedarnos solo con nombres
+        
+        # Agregamos los clásicos por si acaso falló el listado
+        candidatos.extend(['gemini-1.5-flash', 'gemini-pro', 'models/gemini-1.5-flash'])
+
+        # PASO 3: Probar conexión uno por uno
+        errores = []
         for nombre in candidatos:
             try:
+                print(f"🧪 Probando conexión con: {nombre}...")
                 m = genai.GenerativeModel(nombre, safety_settings=safety)
-                m.generate_content("Ping") # Prueba de fuego
-                print(f"✅ IA Conectada: {nombre}")
+                m.generate_content("Ping")
+                print(f"✅ ¡CONEXIÓN EXITOSA CON {nombre}!")
                 return m
             except Exception as e:
-                errores_acumulados.append(f"{nombre}: {str(e)}")
+                errores.append(f"{nombre}: {e}")
                 continue
         
-        last_error = "Fallaron todos los modelos. Detalles: " + " | ".join(errores_acumulados)
-        print(f"❌ {last_error}")
+        last_error = "No funcionó ningún modelo. Modelos detectados: " + str(modelos_disponibles)
         return None
 
     except Exception as e:
-        last_error = f"Error fatal en configuración: {str(e)}"
-        print(f"💀 {last_error}")
+        last_error = f"Error fatal: {str(e)}"
         return None
 
-# Inicializar
 model = configurar_modelo()
 
 # --- SINCRONIZACIÓN ---
 @app.post("/api/sync")
 def sincronizar():
-    if not supabase: return {"status": "error", "msg": "Falta conexión a Supabase"}
+    if not supabase: return {"status": "error", "msg": "Falta Supabase"}
     try:
         r = requests.get(URL_CALENDARIO)
         r.encoding = 'utf-8'
@@ -129,16 +147,14 @@ def get_data():
 
 @app.post("/api/chat")
 async def chat(pregunta: str = Form(...), file: UploadFile = File(None)):
-    global model, last_error
+    global model
+    
+    # Reintento inteligente si no hay modelo cargado
+    if not model: model = configurar_modelo()
     
     if not model:
-        model = configurar_modelo()
+        return {"respuesta": f"❌ Error de IA: {last_error}"}
     
-    if not model:
-        # AQUÍ ESTÁ EL CAMBIO: Devolvemos el error real al usuario
-        return {"respuesta": f"❌ DIAGNÓSTICO DE ERROR: {last_error}"}
-    
-    # Contextos
     data = get_data()
     ctx_db = tabulate(data, headers="keys", tablefmt="github") if data else "(Sin datos)"
     
@@ -167,4 +183,4 @@ async def chat(pregunta: str = Form(...), file: UploadFile = File(None)):
         res = model.generate_content(prompt)
         return {"respuesta": res.text}
     except Exception as e:
-        return {"respuesta": f"Error generando respuesta: {str(e)}"}
+        return {"respuesta": f"Error respuesta: {str(e)}"}
