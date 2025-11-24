@@ -1,16 +1,17 @@
-import pandas as pd
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form
-from fastapi.middleware.cors import CORSMiddleware
-import io
 import os
+import io
+import pandas as pd
+import numpy as np
 import requests
 import pypdf
-from tavily import TavilyClient
-from tabulate import tabulate 
+from fastapi import FastAPI, UploadFile, File, Form
+from fastapi.middleware.cors import CORSMiddleware
 from supabase import create_client, Client
-import numpy as np
+from tavily import TavilyClient
+from tabulate import tabulate
+from openai import OpenAI
 
-app = FastAPI()
+app = FastAPI(title="MinCYT Dashboard API")
 
 app.add_middleware(
     CORSMiddleware,
@@ -20,89 +21,42 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- VARIABLES ---
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY") 
+# --- CONFIGURACIÓN ---
+OPENROUTER_API_KEY = os.environ.get("GEMINI_API_KEY") 
 TAVILY_API_KEY = os.environ.get("TAVILY_API_KEY")
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
-
 URL_CALENDARIO = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQiN48tufdUP4BDXv7cVrh80OI8Li2KqjXQ-4LalIFCJ9ZnMYHr3R4PvSrPDUsk_g/pub?output=csv"
 
-# --- CONEXIÓN SUPABASE ---
-supabase: Client = None
+# Clientes
+supabase = None
 if SUPABASE_URL and SUPABASE_KEY:
     try: supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
     except: pass
 
-# --- IA ROBUSTA (MULTIMODELO) ---
-def consultar_ia(prompt):
-    if not GEMINI_API_KEY:
-        return "❌ Error: Falta API Key (OpenRouter)."
+client_ia = None
+if OPENROUTER_API_KEY:
+    client_ia = OpenAI(base_url="https://openrouter.ai/api/v1", api_key=OPENROUTER_API_KEY)
 
-    url = "https://openrouter.ai/api/v1/chat/completions"
-    
-    headers = {
-        "Authorization": f"Bearer {GEMINI_API_KEY}",
-        "Content-Type": "application/json",
-        "HTTP-Referer": "https://render.com",
-        "X-Title": "MinCYT Dashboard"
-    }
-    
-    # LISTA DE MODELOS A PROBAR (Si falla el 1, prueba el 2, etc.)
-    # Usamos los modelos gratuitos (:free) y experimentales que suelen estar activos
-    modelos_a_probar = [
-        "google/gemini-2.0-flash-exp:free",  # El más nuevo y rápido
-        "google/gemini-exp-1206:free",       # Versión experimental estable
-        "google/gemini-flash-1.5-8b",        # Versión ligera
-        "google/gemini-pro-1.5"              # Versión Pro (Pago, pero fallback)
-    ]
-
-    errores = []
-
-    for modelo in modelos_a_probar:
-        data = {
-            "model": modelo,
-            "messages": [{"role": "user", "content": prompt}]
-        }
-        
-        try:
-            print(f"🤖 Probando modelo: {modelo}...")
-            response = requests.post(url, json=data, headers=headers, timeout=25)
-            
-            if response.status_code == 200:
-                return response.json()['choices'][0]['message']['content']
-            else:
-                error_msg = response.json().get('error', {}).get('message', response.text)
-                errores.append(f"{modelo}: {error_msg}")
-                print(f"⚠️ Falló {modelo}: {error_msg}")
-                continue # Pasa al siguiente modelo
-                
-        except Exception as e:
-            errores.append(f"{modelo}: Error de red {str(e)}")
-            continue
-
-    return f"❌ Fallo total de IA. OpenRouter no respondió con ningún modelo. Detalles: {'; '.join(errores)}"
-
-# --- SINCRONIZACIÓN ---
+# --- FUNCIÓN DE SINCRONIZACIÓN (DATA) ---
 @app.post("/api/sync")
-def sincronizar():
-    if not supabase: return {"status": "error", "msg": "Falta conexión a Supabase"}
+def sincronizar_datos():
+    if not supabase: return {"status": "error", "msg": "Falta conexión DB"}
     try:
-        print("📥 Descargando Excel...")
-        r = requests.get(URL_CALENDARIO)
+        r = requests.get(URL_CALENDARIO, timeout=10)
         r.encoding = 'utf-8'
         df = pd.read_csv(io.BytesIO(r.content))
         
+        # Limpieza
         df.columns = [c.lower().strip() for c in df.columns]
-        traduccion = {
+        mapeo = {
             "nac/intl": "nac_intl", "título": "titulo", "titulo": "titulo",
             "fecha inicio": "fecha_inicio", "fecha fin": "fecha_fin",
             "lugar": "lugar", "organizador": "organizador",
-            "¿pagan?": "pagan", "pagan": "pagan", "pagan?": "pagan",
+            "¿pagan?": "pagan", "pagan": "pagan",
             "participante": "participante", "observaciones": "observaciones"
         }
-        df.rename(columns=traduccion, inplace=True)
-        
+        df.rename(columns=mapeo, inplace=True)
         df.replace([np.inf, -np.inf], np.nan, inplace=True)
         df = df.where(pd.notnull(df), None)
         
@@ -111,56 +65,82 @@ def sincronizar():
                 df[col] = pd.to_datetime(df[col], dayfirst=True, errors='coerce').dt.strftime('%Y-%m-%d')
                 df[col] = df[col].replace({np.nan: None})
 
-        cols = ["nac_intl", "titulo", "fecha_inicio", "fecha_fin", "lugar", "organizador", "pagan", "participante", "observaciones"]
-        df = df[[c for c in df.columns if c in cols]]
-        datos = df.to_dict(orient='records')
+        # Guardado
+        cols = [c for c in df.columns if c in list(mapeo.values())]
+        registros = df[cols].to_dict(orient='records')
         
         supabase.table("calendario_internacional").delete().neq("id", 0).execute()
-        if datos: supabase.table("calendario_internacional").insert(datos).execute()
+        if registros: supabase.table("calendario_internacional").insert(registros).execute()
             
-        return {"status": "ok", "msg": f"¡Éxito! {len(datos)} eventos actualizados."}
+        return {"status": "ok", "msg": f"✅ {len(registros)} eventos sincronizados."}
     except Exception as e:
-        return {"status": "error", "msg": f"Error Sync: {str(e)}"}
+        return {"status": "error", "msg": f"Error: {str(e)}"}
 
-# --- ENDPOINTS ---
+# --- ENDPOINT DATOS ---
 @app.get("/api/data")
-def get_data():
+def obtener_datos():
     if not supabase: return []
     try: return supabase.table("calendario_internacional").select("*").order("fecha_inicio", desc=False).execute().data
     except: return []
 
+# --- CHATBOT PROFESIONAL ---
 @app.post("/api/chat")
-async def chat(pregunta: str = Form(...), file: UploadFile = File(None)):
-    # 1. Contexto Datos
-    data = get_data()
-    ctx_db = tabulate(data, headers="keys", tablefmt="github") if data else "(Sin datos)"
-    
-    # 2. Web
+async def chat_endpoint(pregunta: str = Form(...), file: UploadFile = File(None)):
+    if not client_ia: return {"respuesta": "❌ Error: Sistema de IA desconectado."}
+
+    # 1. Contextos
+    ctx_db = "(Sin datos)"
+    try:
+        data = obtener_datos()
+        if data: ctx_db = tabulate(data, headers="keys", tablefmt="github")
+    except: pass
+
     ctx_web = ""
     if TAVILY_API_KEY:
-        try: 
-            tavily = TavilyClient(api_key=TAVILY_API_KEY)
-            res = tavily.search(query=pregunta, search_depth="advanced", max_results=3)
-            for r in res.get('results', []):
-                ctx_web += f"- {r['title']}: {r['content']}\n"
+        try:
+            t = TavilyClient(api_key=TAVILY_API_KEY)
+            res = t.search(query=pregunta, search_depth="advanced", max_results=3)
+            ctx_web = "\n".join([f"- {r['title']}: {r['content']}" for r in res.get('results', [])])
         except: pass
 
-    # 3. PDF
     ctx_pdf = ""
     if file:
         try:
-            content = await file.read()
-            pdf = pypdf.PdfReader(io.BytesIO(content))
-            for p in pdf.pages[:5]: ctx_pdf += p.extract_text()
+            c = await file.read()
+            pdf = pypdf.PdfReader(io.BytesIO(c))
+            ctx_pdf = "\n".join([p.extract_text() for p in pdf.pages[:5]])
         except: pass
 
-    prompt = f"""
-    Eres el Asistente MinCYT.
-    CALENDARIO (DB): {ctx_db}
-    WEB: {ctx_web}
-    PDF: {ctx_pdf}
-    PREGUNTA: "{pregunta}"
+    # 2. Prompt
+    sistema = """Eres el Asistente Inteligente del MinCYT.
+    FUENTES:
+    1. [DB] CALENDARIO OFICIAL: Verdad absoluta para eventos/viajes.
+    2. [WEB] INTERNET: Para noticias, deportes y actualidad.
+    3. [PDF] DOCUMENTO: Si el usuario sube uno.
+    
+    INSTRUCCIONES:
+    - Si la respuesta está en el Calendario, úsalo.
+    - Si no, busca en Internet.
+    - Sé profesional y conciso.
     """
     
-    respuesta = consultar_ia(prompt)
-    return {"respuesta": respuesta}
+    usuario = f"DATOS: {ctx_db}\nWEB: {ctx_web}\nPDF: {ctx_pdf}\nPREGUNTA: {pregunta}"
+
+    # 3. Llamada con FALLBACK AUTOMÁTICO (Esto es lo profesional)
+    # Si el primer modelo falla, prueba el segundo automáticamente sin mostrar error al usuario.
+    modelos = ["google/gemini-2.0-flash-exp:free", "google/gemini-flash-1.5", "google/gemini-pro-1.5"]
+    
+    for modelo in modelos:
+        try:
+            print(f"🤖 Probando {modelo}...")
+            completion = client_ia.chat.completions.create(
+                model=modelo,
+                messages=[{"role": "system", "content": sistema}, {"role": "user", "content": usuario}],
+                extra_headers={"HTTP-Referer": "https://render.com", "X-Title": "MinCYT"}
+            )
+            return {"respuesta": completion.choices[0].message.content}
+        except Exception as e:
+            print(f"⚠️ Falló {modelo}: {e}")
+            continue
+            
+    return {"respuesta": "❌ Lo siento, el servicio de IA está saturado en este momento. Intenta de nuevo en unos segundos."}
