@@ -22,13 +22,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- TUS LLAVES (Ya configuradas en Render) ---
+# --- TUS LLAVES ---
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 TAVILY_API_KEY = os.environ.get("TAVILY_API_KEY")
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 
-# --- TU ÚNICO LINK DE VERDAD (Calendario) ---
+# --- LINK CALENDARIO ---
 URL_CALENDARIO = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQiN48tufdUP4BDXv7cVrh80OI8Li2KqjXQ-4LalIFCJ9ZnMYHr3R4PvSrPDUsk_g/pub?output=csv"
 
 # --- CONEXIONES ---
@@ -43,7 +43,7 @@ if GEMINI_API_KEY:
     try: model = genai.GenerativeModel('gemini-1.5-flash')
     except: pass
 
-# --- FUNCIÓN DE SINCRONIZACIÓN BLINDADA ---
+# --- FUNCIÓN DE SINCRONIZACIÓN BLINDADA ANTI-NAN ---
 @app.post("/api/sync")
 def sincronizar():
     if not supabase: return {"status": "error", "msg": "Falta conexión a Supabase"}
@@ -55,11 +55,9 @@ def sincronizar():
         r.encoding = 'utf-8'
         df = pd.read_csv(io.BytesIO(r.content))
         
-        # 2. Normalizar columnas (Tu Excel -> Base de Datos)
-        # Convertimos todo a minúsculas y quitamos espacios
+        # 2. Normalizar columnas
         df.columns = [c.lower().strip() for c in df.columns]
         
-        # Mapeo EXACTO basado en tu imagen
         traduccion = {
             "nac/intl": "nac_intl",
             "título": "titulo", "titulo": "titulo",
@@ -73,15 +71,22 @@ def sincronizar():
         }
         df.rename(columns=traduccion, inplace=True)
         
-        # 3. Limpiar datos (Fechas y vacíos)
-        df = df.replace({np.nan: None})
+        # 3. LIMPIEZA PROFUNDA (Aquí estaba el error)
+        # Convertimos infinitos a NaN primero
+        df.replace([np.inf, -np.inf], np.nan, inplace=True)
         
+        # Reemplazamos NaN con None (JSON null) de forma segura
+        # El método .where(pd.notnull(df), None) es más robusto que .replace para JSON
+        df = df.where(pd.notnull(df), None)
+        
+        # Limpieza de fechas
         for col in ["fecha_inicio", "fecha_fin"]:
             if col in df.columns:
-                # Forzamos que entienda DD/MM/YYYY
                 df[col] = pd.to_datetime(df[col], dayfirst=True, errors='coerce').dt.strftime('%Y-%m-%d')
+                # Reemplazar 'NaT' (Not a Time) que genera pandas si falla la fecha
+                df[col] = df[col].replace({np.nan: None})
 
-        # 4. Guardar en Supabase (Solo columnas válidas)
+        # 4. Guardar en Supabase
         cols_validas = ["nac_intl", "titulo", "fecha_inicio", "fecha_fin", "lugar", "organizador", "pagan", "participante", "observaciones"]
         df_final = df[[c for c in df.columns if c in cols_validas]]
         
@@ -96,14 +101,13 @@ def sincronizar():
         
     except Exception as e:
         print(f"Error Sync: {e}")
-        return {"status": "error", "msg": str(e)}
+        return {"status": "error", "msg": f"Error JSON: {str(e)}"}
 
-# --- ENDPOINTS DE DATOS ---
+# --- ENDPOINTS ---
 @app.get("/api/data")
 def get_data():
     if not supabase: return []
     try: 
-        # Traemos todo el calendario ordenado por fecha
         return supabase.table("calendario_internacional").select("*").order("fecha_inicio", desc=False).execute().data
     except: return []
 
@@ -111,20 +115,14 @@ def get_data():
 async def chat(pregunta: str = Form(...), file: UploadFile = File(None)):
     if not model: return {"respuesta": "Error: IA no disponible."}
     
-    # 1. Contexto del Calendario (Base de Datos)
     data = get_data()
-    ctx_db = "(El calendario está vacío. Pide actualizar datos)"
-    if data:
-        # Usamos tabulate para que la IA entienda la estructura de filas y columnas
-        ctx_db = tabulate(data, headers="keys", tablefmt="github")
+    ctx_db = tabulate(data, headers="keys", tablefmt="github") if data else "(Sin datos)"
     
-    # 2. Contexto Web (Si aplica)
     ctx_web = ""
     if TAVILY_API_KEY:
         try: ctx_web = str(TavilyClient(api_key=TAVILY_API_KEY).search(pregunta, max_results=2))
         except: pass
 
-    # 3. Contexto PDF (Si hay archivo)
     ctx_pdf = ""
     if file:
         try:
@@ -136,19 +134,14 @@ async def chat(pregunta: str = Form(...), file: UploadFile = File(None)):
     prompt = f"""
     Eres el Asistente Oficial del MinCYT.
     
-    TU FUENTE DE VERDAD (CALENDARIO INTERNACIONAL):
+    CALENDARIO INTERNACIONAL (DB):
     {ctx_db}
     
     OTRAS FUENTES:
-    - PDF Adjunto: {ctx_pdf}
-    - Internet: {ctx_web}
+    - PDF: {ctx_pdf}
+    - Web: {ctx_web}
     
-    PREGUNTA DEL USUARIO: {pregunta}
-    
-    INSTRUCCIONES:
-    - Si preguntan por eventos, fechas o viajes, BASATE EXCLUSIVAMENTE en la tabla de 'CALENDARIO INTERNACIONAL' provista arriba.
-    - Si la tabla dice 'pagan: NO', avísalo.
-    - Sé preciso con las fechas.
+    Consulta: {pregunta}
     """
     
     try:
