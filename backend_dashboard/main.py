@@ -3,7 +3,8 @@ from fastapi import FastAPI, HTTPException, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 import io
 import os
-import requests
+import google.generativeai as genai
+from google.generativeai.types import HarmCategory, HarmBlockThreshold
 import pypdf
 from tavily import TavilyClient
 from tabulate import tabulate 
@@ -34,58 +35,49 @@ if SUPABASE_URL and SUPABASE_KEY:
     try: supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
     except: pass
 
-# --- FUNCIÓN IA DETECTIVE (Diagnóstico Extremo) ---
-def consultar_gemini_debug(prompt):
-    # 1. Verificación de Llave
+# --- CONFIGURACIÓN IA ROBUSTA ---
+def obtener_respuesta_gemini(prompt):
     if not GEMINI_API_KEY:
-        return "❌ Error: La variable GEMINI_API_KEY está vacía o no existe."
-    
-    # Ocultamos la llave pero mostramos su "huella digital" para ver si está rota
-    largo = len(GEMINI_API_KEY)
-    final = GEMINI_API_KEY[-4:] if largo > 4 else "????",
-    debug_info = f"🔑 Llave detectada: Longitud {largo}, termina en '...{final}'"
+        return "❌ Error: Falta GEMINI_API_KEY."
 
-    # 2. Intentos con múltiples versiones y modelos
-    # A veces v1beta falla y v1 funciona, o viceversa.
-    combinaciones = [
-        ("v1beta", "gemini-1.5-flash"),
-        ("v1", "gemini-1.5-flash"),
-        ("v1beta", "gemini-pro"),
-        ("v1", "gemini-pro")
-    ]
-    
-    log_errores = []
-
-    for version, modelo in combinaciones:
-        url = f"https://generativelanguage.googleapis.com/{version}/models/{modelo}:generateContent?key={GEMINI_API_KEY}"
-        headers = {"Content-Type": "application/json"}
-        data = {
-            "contents": [{"parts": [{"text": prompt}]}]
-        }
+    try:
+        genai.configure(api_key=GEMINI_API_KEY)
         
-        try:
-            response = requests.post(url, json=data, headers=headers, timeout=10)
-            
-            # ¡ÉXITO!
-            if response.status_code == 200:
-                return response.json()['candidates'][0]['content']['parts'][0]['text']
-            
-            # Capturar el error exacto que manda Google
-            mensaje_error = response.text
-            log_errores.append(f"❌ [{version}/{modelo}] Status {response.status_code}: {mensaje_error}")
+        # Desactivar TODOS los filtros de seguridad para evitar bloqueos silenciosos
+        safety_settings = {
+            HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
+            HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
+            HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
+            HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
+        }
 
-        except Exception as e:
-            log_errores.append(f"💥 Excepción conectando a {version}: {str(e)}")
+        # Lista de modelos a probar en orden
+        modelos = [
+            'gemini-1.5-flash',
+            'gemini-1.5-pro',
+            'gemini-pro',
+            'models/gemini-1.5-flash'
+        ]
 
-    # Si llegamos acá, nada funcionó. Devolvemos el reporte forense.
-    return f"""
-    🚨 REPORTE DE FALLO TOTAL 🚨
-    
-    {debug_info}
-    
-    Errores recibidos de Google:
-    {chr(10).join(log_errores)}
-    """
+        errores = []
+        for nombre_modelo in modelos:
+            try:
+                model = genai.GenerativeModel(nombre_modelo, safety_settings=safety_settings)
+                response = model.generate_content(prompt)
+                
+                # Verificar si la respuesta fue bloqueada
+                if response.prompt_feedback and response.prompt_feedback.block_reason:
+                    return f"⚠️ Respuesta bloqueada por Google ({nombre_modelo}). Razón: {response.prompt_feedback.block_reason}"
+                
+                return response.text
+            except Exception as e:
+                errores.append(f"{nombre_modelo}: {str(e)}")
+                continue
+        
+        return f"❌ Fallo total de IA. Detalles: {'; '.join(errores)}"
+
+    except Exception as e:
+        return f"💀 Error crítico en configuración: {str(e)}"
 
 # --- SINCRONIZACIÓN ---
 @app.post("/api/sync")
@@ -150,13 +142,22 @@ async def chat(pregunta: str = Form(...), file: UploadFile = File(None)):
                 ctx_web += f"- {r['title']}: {r['content']}\n"
         except: pass
 
+    # 3. PDF
+    ctx_pdf = ""
+    if file:
+        try:
+            content = await file.read()
+            pdf = pypdf.PdfReader(io.BytesIO(content))
+            for p in pdf.pages[:5]: ctx_pdf += p.extract_text()
+        except: pass
+
     prompt = f"""
     Eres el Asistente MinCYT.
     CALENDARIO (DB): {ctx_db}
     WEB: {ctx_web}
+    PDF: {ctx_pdf}
     PREGUNTA: "{pregunta}"
     """
     
-    # Usamos la función detective
-    respuesta_ia = consultar_gemini_debug(prompt)
-    return {"respuesta": respuesta_ia}
+    respuesta = obtener_respuesta_gemini(prompt)
+    return {"respuesta": respuesta}
