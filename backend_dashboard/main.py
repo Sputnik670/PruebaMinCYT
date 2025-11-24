@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from supabase import create_client, Client
 from tavily import TavilyClient
 from tabulate import tabulate
-from openai import OpenAI
+from openai import OpenAI # Cliente estándar y limpio
 
 app = FastAPI(title="MinCYT Dashboard API")
 
@@ -22,6 +22,7 @@ app.add_middleware(
 )
 
 # --- CONFIGURACIÓN ---
+# Usamos la variable GEMINI_API_KEY para la llave de OpenRouter (sk-or-...)
 OPENROUTER_API_KEY = os.environ.get("GEMINI_API_KEY") 
 TAVILY_API_KEY = os.environ.get("TAVILY_API_KEY")
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
@@ -36,9 +37,13 @@ if SUPABASE_URL and SUPABASE_KEY:
 
 client_ia = None
 if OPENROUTER_API_KEY:
-    client_ia = OpenAI(base_url="https://openrouter.ai/api/v1", api_key=OPENROUTER_API_KEY)
+    # OpenRouter es compatible con la librería de OpenAI. ¡Mucho más fácil!
+    client_ia = OpenAI(
+        base_url="https://openrouter.ai/api/v1",
+        api_key=OPENROUTER_API_KEY,
+    )
 
-# --- FUNCIÓN DE SINCRONIZACIÓN (DATA) ---
+# --- 1. SINCRONIZACIÓN (Google Sheets -> Supabase) ---
 @app.post("/api/sync")
 def sincronizar_datos():
     if not supabase: return {"status": "error", "msg": "Falta conexión DB"}
@@ -47,7 +52,7 @@ def sincronizar_datos():
         r.encoding = 'utf-8'
         df = pd.read_csv(io.BytesIO(r.content))
         
-        # Limpieza
+        # Limpieza y Normalización
         df.columns = [c.lower().strip() for c in df.columns]
         mapeo = {
             "nac/intl": "nac_intl", "título": "titulo", "titulo": "titulo",
@@ -76,19 +81,19 @@ def sincronizar_datos():
     except Exception as e:
         return {"status": "error", "msg": f"Error: {str(e)}"}
 
-# --- ENDPOINT DATOS ---
+# --- 2. LECTURA DE DATOS (Supabase -> Frontend) ---
 @app.get("/api/data")
 def obtener_datos():
     if not supabase: return []
     try: return supabase.table("calendario_internacional").select("*").order("fecha_inicio", desc=False).execute().data
     except: return []
 
-# --- CHATBOT PROFESIONAL ---
+# --- 3. CEREBRO IA (Chatbot) ---
 @app.post("/api/chat")
 async def chat_endpoint(pregunta: str = Form(...), file: UploadFile = File(None)):
     if not client_ia: return {"respuesta": "❌ Error: Sistema de IA desconectado."}
 
-    # 1. Contextos
+    # Recopilar Contexto
     ctx_db = "(Sin datos)"
     try:
         data = obtener_datos()
@@ -111,7 +116,7 @@ async def chat_endpoint(pregunta: str = Form(...), file: UploadFile = File(None)
             ctx_pdf = "\n".join([p.extract_text() for p in pdf.pages[:5]])
         except: pass
 
-    # 2. Prompt
+    # Prompt Maestro
     sistema = """Eres el Asistente Inteligente del MinCYT.
     FUENTES:
     1. [DB] CALENDARIO OFICIAL: Verdad absoluta para eventos/viajes.
@@ -126,13 +131,17 @@ async def chat_endpoint(pregunta: str = Form(...), file: UploadFile = File(None)
     
     usuario = f"DATOS: {ctx_db}\nWEB: {ctx_web}\nPDF: {ctx_pdf}\nPREGUNTA: {pregunta}"
 
-    # 3. Llamada con FALLBACK AUTOMÁTICO (Esto es lo profesional)
-    # Si el primer modelo falla, prueba el segundo automáticamente sin mostrar error al usuario.
-    modelos = ["google/gemini-2.0-flash-exp:free", "google/gemini-flash-1.5", "google/gemini-pro-1.5"]
+    # Lógica de Fallback Silencioso (Aquí está la magia limpia)
+    # Probamos modelos de más nuevo a más viejo/estable
+    modelos = [
+        "google/gemini-2.0-flash-exp:free", 
+        "google/gemini-flash-1.5",
+        "google/gemini-pro-1.5"
+    ]
     
     for modelo in modelos:
         try:
-            print(f"🤖 Probando {modelo}...")
+            print(f"🤖 Intentando con {modelo}...")
             completion = client_ia.chat.completions.create(
                 model=modelo,
                 messages=[{"role": "system", "content": sistema}, {"role": "user", "content": usuario}],
@@ -140,7 +149,8 @@ async def chat_endpoint(pregunta: str = Form(...), file: UploadFile = File(None)
             )
             return {"respuesta": completion.choices[0].message.content}
         except Exception as e:
-            print(f"⚠️ Falló {modelo}: {e}")
+            print(f"⚠️ Falló {modelo}, probando siguiente...")
             continue
             
-    return {"respuesta": "❌ Lo siento, el servicio de IA está saturado en este momento. Intenta de nuevo en unos segundos."}
+    # Si llegamos acá, es que TODO falló. Mensaje bonito para el usuario.
+    return {"respuesta": "⚠️ El servicio de inteligencia está saturado momentáneamente. Por favor, intenta tu pregunta de nuevo en unos segundos."}
