@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from supabase import create_client, Client
 from tavily import TavilyClient
 from tabulate import tabulate
-from openai import OpenAI # Cliente estándar y limpio
+from openai import OpenAI
 
 app = FastAPI(title="MinCYT Dashboard API")
 
@@ -21,8 +21,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- CONFIGURACIÓN ---
-# Usamos la variable GEMINI_API_KEY para la llave de OpenRouter (sk-or-...)
+# --- VARIABLES ---
 OPENROUTER_API_KEY = os.environ.get("GEMINI_API_KEY") 
 TAVILY_API_KEY = os.environ.get("TAVILY_API_KEY")
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
@@ -37,13 +36,12 @@ if SUPABASE_URL and SUPABASE_KEY:
 
 client_ia = None
 if OPENROUTER_API_KEY:
-    # OpenRouter es compatible con la librería de OpenAI. ¡Mucho más fácil!
     client_ia = OpenAI(
         base_url="https://openrouter.ai/api/v1",
         api_key=OPENROUTER_API_KEY,
     )
 
-# --- 1. SINCRONIZACIÓN (Google Sheets -> Supabase) ---
+# --- SINCRONIZACIÓN ---
 @app.post("/api/sync")
 def sincronizar_datos():
     if not supabase: return {"status": "error", "msg": "Falta conexión DB"}
@@ -52,7 +50,6 @@ def sincronizar_datos():
         r.encoding = 'utf-8'
         df = pd.read_csv(io.BytesIO(r.content))
         
-        # Limpieza y Normalización
         df.columns = [c.lower().strip() for c in df.columns]
         mapeo = {
             "nac/intl": "nac_intl", "título": "titulo", "titulo": "titulo",
@@ -70,7 +67,6 @@ def sincronizar_datos():
                 df[col] = pd.to_datetime(df[col], dayfirst=True, errors='coerce').dt.strftime('%Y-%m-%d')
                 df[col] = df[col].replace({np.nan: None})
 
-        # Guardado
         cols = [c for c in df.columns if c in list(mapeo.values())]
         registros = df[cols].to_dict(orient='records')
         
@@ -81,19 +77,18 @@ def sincronizar_datos():
     except Exception as e:
         return {"status": "error", "msg": f"Error: {str(e)}"}
 
-# --- 2. LECTURA DE DATOS (Supabase -> Frontend) ---
+# --- DATOS ---
 @app.get("/api/data")
 def obtener_datos():
     if not supabase: return []
     try: return supabase.table("calendario_internacional").select("*").order("fecha_inicio", desc=False).execute().data
     except: return []
 
-# --- 3. CEREBRO IA (Chatbot) ---
+# --- CHATBOT ---
 @app.post("/api/chat")
 async def chat_endpoint(pregunta: str = Form(...), file: UploadFile = File(None)):
     if not client_ia: return {"respuesta": "❌ Error: Sistema de IA desconectado."}
 
-    # Recopilar Contexto
     ctx_db = "(Sin datos)"
     try:
         data = obtener_datos()
@@ -116,7 +111,6 @@ async def chat_endpoint(pregunta: str = Form(...), file: UploadFile = File(None)
             ctx_pdf = "\n".join([p.extract_text() for p in pdf.pages[:5]])
         except: pass
 
-    # Prompt Maestro
     sistema = """Eres el Asistente Inteligente del MinCYT.
     FUENTES:
     1. [DB] CALENDARIO OFICIAL: Verdad absoluta para eventos/viajes.
@@ -124,24 +118,23 @@ async def chat_endpoint(pregunta: str = Form(...), file: UploadFile = File(None)
     3. [PDF] DOCUMENTO: Si el usuario sube uno.
     
     INSTRUCCIONES:
-    - Si la respuesta está en el Calendario, úsalo.
-    - Si no, busca en Internet.
-    - Sé profesional y conciso.
+    - Prioriza la información del CALENDARIO si preguntan por eventos.
+    - Si preguntan algo externo (clima, deportes), usa INTERNET.
     """
     
     usuario = f"DATOS: {ctx_db}\nWEB: {ctx_web}\nPDF: {ctx_pdf}\nPREGUNTA: {pregunta}"
 
-    # Lógica de Fallback Silencioso (Aquí está la magia limpia)
-    # Probamos modelos de más nuevo a más viejo/estable
+    # LISTA DE MODELOS ESTABLES (Si falla uno, prueba el otro)
     modelos = [
-        "google/gemini-2.0-flash-exp:free", 
-        "google/gemini-flash-1.5",
-        "google/gemini-pro-1.5"
+        "google/gemini-flash-1.5",      # El más barato y rápido oficial
+        "google/gemini-pro-1.5",        # El más potente
+        "google/gemini-2.0-flash-exp:free" # El experimental (solo por si acaso)
     ]
     
+    errores = []
     for modelo in modelos:
         try:
-            print(f"🤖 Intentando con {modelo}...")
+            print(f"🤖 Probando {modelo}...")
             completion = client_ia.chat.completions.create(
                 model=modelo,
                 messages=[{"role": "system", "content": sistema}, {"role": "user", "content": usuario}],
@@ -149,8 +142,8 @@ async def chat_endpoint(pregunta: str = Form(...), file: UploadFile = File(None)
             )
             return {"respuesta": completion.choices[0].message.content}
         except Exception as e:
-            print(f"⚠️ Falló {modelo}, probando siguiente...")
+            print(f"⚠️ Falló {modelo}: {e}")
+            errores.append(f"{modelo}: {str(e)}")
             continue
             
-    # Si llegamos acá, es que TODO falló. Mensaje bonito para el usuario.
-    return {"respuesta": "⚠️ El servicio de inteligencia está saturado momentáneamente. Por favor, intenta tu pregunta de nuevo en unos segundos."}
+    return {"respuesta": f"❌ Error de IA. Detalles: {'; '.join(errores)}"}
