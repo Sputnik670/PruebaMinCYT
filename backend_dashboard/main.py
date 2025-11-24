@@ -22,13 +22,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- TUS LLAVES ---
+# --- LLAVES ---
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 TAVILY_API_KEY = os.environ.get("TAVILY_API_KEY")
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 
-# --- LINK CALENDARIO ---
 URL_CALENDARIO = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQiN48tufdUP4BDXv7cVrh80OI8Li2KqjXQ-4LalIFCJ9ZnMYHr3R4PvSrPDUsk_g/pub?output=csv"
 
 # --- CONEXIONES ---
@@ -43,19 +42,18 @@ if GEMINI_API_KEY:
     try: model = genai.GenerativeModel('gemini-1.5-flash')
     except: pass
 
-# --- FUNCIÓN DE SINCRONIZACIÓN BLINDADA ANTI-NAN ---
+# --- FUNCIÓN DE SINCRONIZACIÓN (VERSION FINAL) ---
 @app.post("/api/sync")
 def sincronizar():
     if not supabase: return {"status": "error", "msg": "Falta conexión a Supabase"}
     
     try:
-        # 1. Descargar Excel
-        print("Descargando Excel...")
+        print("📥 Descargando Excel...")
         r = requests.get(URL_CALENDARIO)
         r.encoding = 'utf-8'
         df = pd.read_csv(io.BytesIO(r.content))
         
-        # 2. Normalizar columnas
+        # 1. Normalizar cabeceras
         df.columns = [c.lower().strip() for c in df.columns]
         
         traduccion = {
@@ -71,22 +69,23 @@ def sincronizar():
         }
         df.rename(columns=traduccion, inplace=True)
         
-        # 3. LIMPIEZA PROFUNDA (Aquí estaba el error)
-        # Convertimos infinitos a NaN primero
+        # 2. LIMPIEZA AGRESIVA DE DATOS (Aquí estaba el fallo)
+        # Primero convertimos Infinitos a NaN
         df.replace([np.inf, -np.inf], np.nan, inplace=True)
         
-        # Reemplazamos NaN con None (JSON null) de forma segura
-        # El método .where(pd.notnull(df), None) es más robusto que .replace para JSON
+        # La técnica definitiva: `where` reemplaza todo lo que sea NaN por None
+        # Esto es mucho más seguro que .replace para JSON
         df = df.where(pd.notnull(df), None)
         
-        # Limpieza de fechas
+        # 3. Formateo de Fechas
         for col in ["fecha_inicio", "fecha_fin"]:
             if col in df.columns:
+                # Coerce convierte errores en NaT (Not a Time)
                 df[col] = pd.to_datetime(df[col], dayfirst=True, errors='coerce').dt.strftime('%Y-%m-%d')
-                # Reemplazar 'NaT' (Not a Time) que genera pandas si falla la fecha
+                # Limpiamos los NaT que hayan quedado
                 df[col] = df[col].replace({np.nan: None})
 
-        # 4. Guardar en Supabase
+        # 4. Filtrar y Guardar
         cols_validas = ["nac_intl", "titulo", "fecha_inicio", "fecha_fin", "lugar", "organizador", "pagan", "participante", "observaciones"]
         df_final = df[[c for c in df.columns if c in cols_validas]]
         
@@ -94,16 +93,18 @@ def sincronizar():
         
         # Borrón y cuenta nueva
         supabase.table("calendario_internacional").delete().neq("id", 0).execute()
+        
         if datos:
             supabase.table("calendario_internacional").insert(datos).execute()
             
-        return {"status": "ok", "msg": f"¡Éxito! {len(datos)} eventos actualizados."}
+        return {"status": "ok", "msg": f"¡Éxito! {len(datos)} eventos guardados."}
         
     except Exception as e:
-        print(f"Error Sync: {e}")
-        return {"status": "error", "msg": f"Error JSON: {str(e)}"}
+        print(f"❌ Error Sync: {e}")
+        # Devolvemos el error detallado para verlo en el alerta del frontend
+        return {"status": "error", "msg": f"Error procesando datos: {str(e)}"}
 
-# --- ENDPOINTS ---
+# --- ENDPOINTS DE DATOS ---
 @app.get("/api/data")
 def get_data():
     if not supabase: return []
@@ -134,7 +135,7 @@ async def chat(pregunta: str = Form(...), file: UploadFile = File(None)):
     prompt = f"""
     Eres el Asistente Oficial del MinCYT.
     
-    CALENDARIO INTERNACIONAL (DB):
+    CALENDARIO (DB):
     {ctx_db}
     
     OTRAS FUENTES:
