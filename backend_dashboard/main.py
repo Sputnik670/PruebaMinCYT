@@ -4,8 +4,6 @@ from fastapi.middleware.cors import CORSMiddleware
 import io
 import os
 import requests
-# Eliminamos la dependencia de la librería problemática
-# import google.generativeai as genai 
 import pypdf
 from tavily import TavilyClient
 from tabulate import tabulate 
@@ -36,48 +34,58 @@ if SUPABASE_URL and SUPABASE_KEY:
     try: supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
     except: pass
 
-# --- FUNCIÓN IA DIRECTA (HTTP RAW) ---
-def consultar_gemini(prompt):
-    """Consulta a Gemini usando HTTP puro para evitar errores de librería."""
+# --- FUNCIÓN IA DETECTIVE (Diagnóstico Extremo) ---
+def consultar_gemini_debug(prompt):
+    # 1. Verificación de Llave
     if not GEMINI_API_KEY:
-        return "❌ Error: Falta la API Key de Gemini."
-
-    # Intentamos primero con el modelo rápido (Flash)
-    modelos = ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-pro"]
+        return "❌ Error: La variable GEMINI_API_KEY está vacía o no existe."
     
-    for modelo in modelos:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{modelo}:generateContent?key={GEMINI_API_KEY}"
+    # Ocultamos la llave pero mostramos su "huella digital" para ver si está rota
+    largo = len(GEMINI_API_KEY)
+    final = GEMINI_API_KEY[-4:] if largo > 4 else "????",
+    debug_info = f"🔑 Llave detectada: Longitud {largo}, termina en '...{final}'"
+
+    # 2. Intentos con múltiples versiones y modelos
+    # A veces v1beta falla y v1 funciona, o viceversa.
+    combinaciones = [
+        ("v1beta", "gemini-1.5-flash"),
+        ("v1", "gemini-1.5-flash"),
+        ("v1beta", "gemini-pro"),
+        ("v1", "gemini-pro")
+    ]
+    
+    log_errores = []
+
+    for version, modelo in combinaciones:
+        url = f"https://generativelanguage.googleapis.com/{version}/models/{modelo}:generateContent?key={GEMINI_API_KEY}"
         headers = {"Content-Type": "application/json"}
         data = {
-            "contents": [{
-                "parts": [{"text": prompt}]
-            }]
+            "contents": [{"parts": [{"text": prompt}]}]
         }
         
         try:
             response = requests.post(url, json=data, headers=headers, timeout=10)
             
-            # Si funciona (Código 200), procesamos y retornamos
+            # ¡ÉXITO!
             if response.status_code == 200:
-                json_response = response.json()
-                try:
-                    texto = json_response['candidates'][0]['content']['parts'][0]['text']
-                    return texto
-                except KeyError:
-                    return "La IA respondió pero no generó texto (Bloqueo de seguridad)."
+                return response.json()['candidates'][0]['content']['parts'][0]['text']
             
-            # Si da error 404, probamos el siguiente modelo del bucle
-            if response.status_code == 404:
-                print(f"Modelo {modelo} no encontrado, probando siguiente...")
-                continue
-                
-            # Si es otro error, lo reportamos
-            return f"Error Google ({modelo}): {response.status_code} - {response.text}"
+            # Capturar el error exacto que manda Google
+            mensaje_error = response.text
+            log_errores.append(f"❌ [{version}/{modelo}] Status {response.status_code}: {mensaje_error}")
 
         except Exception as e:
-            return f"Error de conexión: {str(e)}"
+            log_errores.append(f"💥 Excepción conectando a {version}: {str(e)}")
 
-    return "❌ Error Crítico: Ningún modelo de Gemini respondió (Verifica tu API Key en Google AI Studio)."
+    # Si llegamos acá, nada funcionó. Devolvemos el reporte forense.
+    return f"""
+    🚨 REPORTE DE FALLO TOTAL 🚨
+    
+    {debug_info}
+    
+    Errores recibidos de Google:
+    {chr(10).join(log_errores)}
+    """
 
 # --- SINCRONIZACIÓN ---
 @app.post("/api/sync")
@@ -142,31 +150,13 @@ async def chat(pregunta: str = Form(...), file: UploadFile = File(None)):
                 ctx_web += f"- {r['title']}: {r['content']}\n"
         except: pass
 
-    # 3. PDF
-    ctx_pdf = ""
-    if file:
-        try:
-            content = await file.read()
-            pdf = pypdf.PdfReader(io.BytesIO(content))
-            for p in pdf.pages[:5]: ctx_pdf += p.extract_text()
-        except: pass
-
     prompt = f"""
     Eres el Asistente MinCYT.
-    
-    1. 🏛️ CALENDARIO OFICIAL:
-    {ctx_db}
-    
-    2. 🌍 INTERNET:
-    {ctx_web}
-    
-    3. 📄 PDF:
-    {ctx_pdf}
-    
+    CALENDARIO (DB): {ctx_db}
+    WEB: {ctx_web}
     PREGUNTA: "{pregunta}"
-    INSTRUCCIONES: Responde directo. Si es del ministerio usa la fuente 1. Si es general usa la 2.
     """
     
-    # LLAMADA DIRECTA SIN LIBRERÍA
-    respuesta_ia = consultar_gemini(prompt)
+    # Usamos la función detective
+    respuesta_ia = consultar_gemini_debug(prompt)
     return {"respuesta": respuesta_ia}
