@@ -21,7 +21,6 @@ app.add_middleware(
 )
 
 # --- VARIABLES ---
-# Esta variable AHORA tiene tu llave de OpenRouter (sk-or-v1...)
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY") 
 TAVILY_API_KEY = os.environ.get("TAVILY_API_KEY")
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
@@ -35,7 +34,7 @@ if SUPABASE_URL and SUPABASE_KEY:
     try: supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
     except: pass
 
-# --- FUNCIÓN IA ROBUSTA (VÍA OPENROUTER) ---
+# --- IA ROBUSTA (MULTIMODELO) ---
 def consultar_ia(prompt):
     if not GEMINI_API_KEY:
         return "❌ Error: Falta API Key (OpenRouter)."
@@ -45,35 +44,44 @@ def consultar_ia(prompt):
     headers = {
         "Authorization": f"Bearer {GEMINI_API_KEY}",
         "Content-Type": "application/json",
-        # Opcional: Ayuda a OpenRouter a identificar tu app
         "HTTP-Referer": "https://render.com",
         "X-Title": "MinCYT Dashboard"
     }
     
-    # CAMBIO CLAVE: Usamos 'gemini-flash-1.5' que es más estable y barato
-    data = {
-        "model": "google/gemini-flash-1.5", 
-        "messages": [{"role": "user", "content": prompt}]
-    }
-    
-    try:
-        response = requests.post(url, json=data, headers=headers, timeout=30)
+    # LISTA DE MODELOS A PROBAR (Si falla el 1, prueba el 2, etc.)
+    # Usamos los modelos gratuitos (:free) y experimentales que suelen estar activos
+    modelos_a_probar = [
+        "google/gemini-2.0-flash-exp:free",  # El más nuevo y rápido
+        "google/gemini-exp-1206:free",       # Versión experimental estable
+        "google/gemini-flash-1.5-8b",        # Versión ligera
+        "google/gemini-pro-1.5"              # Versión Pro (Pago, pero fallback)
+    ]
+
+    errores = []
+
+    for modelo in modelos_a_probar:
+        data = {
+            "model": modelo,
+            "messages": [{"role": "user", "content": prompt}]
+        }
         
-        if response.status_code == 200:
-            return response.json()['choices'][0]['message']['content']
-        else:
-            # Si falla Flash, probamos un fallback automático a Pro
-            print(f"⚠️ Flash falló ({response.status_code}), intentando con Pro...")
-            data["model"] = "google/gemini-pro-1.5"
-            response_retry = requests.post(url, json=data, headers=headers, timeout=30)
+        try:
+            print(f"🤖 Probando modelo: {modelo}...")
+            response = requests.post(url, json=data, headers=headers, timeout=25)
             
-            if response_retry.status_code == 200:
-                return response_retry.json()['choices'][0]['message']['content']
-            
-            return f"Error OpenRouter: {response.text}"
-            
-    except Exception as e:
-        return f"Error de conexión: {str(e)}"
+            if response.status_code == 200:
+                return response.json()['choices'][0]['message']['content']
+            else:
+                error_msg = response.json().get('error', {}).get('message', response.text)
+                errores.append(f"{modelo}: {error_msg}")
+                print(f"⚠️ Falló {modelo}: {error_msg}")
+                continue # Pasa al siguiente modelo
+                
+        except Exception as e:
+            errores.append(f"{modelo}: Error de red {str(e)}")
+            continue
+
+    return f"❌ Fallo total de IA. OpenRouter no respondió con ningún modelo. Detalles: {'; '.join(errores)}"
 
 # --- SINCRONIZACIÓN ---
 @app.post("/api/sync")
