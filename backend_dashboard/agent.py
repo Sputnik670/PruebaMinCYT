@@ -3,7 +3,8 @@ import os
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
 # CORRECCION AQUI: Importamos directamente desde langchain_hub
-from langchain_community.hub import pull
+from langchain_community.hub import pull# from langchain_hub import pull
+
 
 from langchain.agents import AgentExecutor, create_structured_chat_agent
 from langchain_community.tools.tavily_search import TavilySearchResults
