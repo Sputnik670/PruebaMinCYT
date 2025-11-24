@@ -3,8 +3,7 @@ from fastapi import FastAPI, HTTPException, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 import io
 import os
-import google.generativeai as genai
-from google.generativeai.types import HarmCategory, HarmBlockThreshold
+import requests
 import pypdf
 from tavily import TavilyClient
 from tabulate import tabulate 
@@ -22,7 +21,8 @@ app.add_middleware(
 )
 
 # --- VARIABLES ---
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+# AHORA ESTA SERÁ LA LLAVE DE OPENROUTER
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY") 
 TAVILY_API_KEY = os.environ.get("TAVILY_API_KEY")
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
@@ -35,49 +35,35 @@ if SUPABASE_URL and SUPABASE_KEY:
     try: supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
     except: pass
 
-# --- CONFIGURACIÓN IA ROBUSTA ---
-def obtener_respuesta_gemini(prompt):
+# --- FUNCIÓN IA ROBUSTA (VÍA OPENROUTER) ---
+def consultar_ia(prompt):
     if not GEMINI_API_KEY:
-        return "❌ Error: Falta GEMINI_API_KEY."
+        return "❌ Error: Falta API Key."
 
+    # Usamos OpenRouter como intermediario fiable para Gemini
+    url = "https://openrouter.ai/api/v1/chat/completions"
+    
+    headers = {
+        "Authorization": f"Bearer {GEMINI_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    
+    # Usamos el modelo Gemini Flash gratuito a través de OpenRouter
+    data = {
+        "model": "google/gemini-pro-1.5", # O 'google/gemini-flash-1.5'
+        "messages": [{"role": "user", "content": prompt}]
+    }
+    
     try:
-        genai.configure(api_key=GEMINI_API_KEY)
+        response = requests.post(url, json=data, headers=headers, timeout=20)
         
-        # Desactivar TODOS los filtros de seguridad para evitar bloqueos silenciosos
-        safety_settings = {
-            HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
-            HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
-            HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
-            HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
-        }
-
-        # Lista de modelos a probar en orden
-        modelos = [
-            'gemini-1.5-flash',
-            'gemini-1.5-pro',
-            'gemini-pro',
-            'models/gemini-1.5-flash'
-        ]
-
-        errores = []
-        for nombre_modelo in modelos:
-            try:
-                model = genai.GenerativeModel(nombre_modelo, safety_settings=safety_settings)
-                response = model.generate_content(prompt)
-                
-                # Verificar si la respuesta fue bloqueada
-                if response.prompt_feedback and response.prompt_feedback.block_reason:
-                    return f"⚠️ Respuesta bloqueada por Google ({nombre_modelo}). Razón: {response.prompt_feedback.block_reason}"
-                
-                return response.text
-            except Exception as e:
-                errores.append(f"{nombre_modelo}: {str(e)}")
-                continue
-        
-        return f"❌ Fallo total de IA. Detalles: {'; '.join(errores)}"
-
+        if response.status_code == 200:
+            return response.json()['choices'][0]['message']['content']
+        else:
+            return f"Error OpenRouter: {response.text}"
+            
     except Exception as e:
-        return f"💀 Error crítico en configuración: {str(e)}"
+        return f"Error de conexión: {str(e)}"
 
 # --- SINCRONIZACIÓN ---
 @app.post("/api/sync")
@@ -109,7 +95,6 @@ def sincronizar():
 
         cols = ["nac_intl", "titulo", "fecha_inicio", "fecha_fin", "lugar", "organizador", "pagan", "participante", "observaciones"]
         df = df[[c for c in df.columns if c in cols]]
-        
         datos = df.to_dict(orient='records')
         
         supabase.table("calendario_internacional").delete().neq("id", 0).execute()
@@ -159,5 +144,6 @@ async def chat(pregunta: str = Form(...), file: UploadFile = File(None)):
     PREGUNTA: "{pregunta}"
     """
     
-    respuesta = obtener_respuesta_gemini(prompt)
+    # Usamos la nueva función robusta
+    respuesta = consultar_ia(prompt)
     return {"respuesta": respuesta}
