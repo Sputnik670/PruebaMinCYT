@@ -21,7 +21,7 @@ app.add_middleware(
 )
 
 # --- VARIABLES ---
-# AHORA ESTA SERÁ LA LLAVE DE OPENROUTER
+# Esta variable AHORA tiene tu llave de OpenRouter (sk-or-v1...)
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY") 
 TAVILY_API_KEY = os.environ.get("TAVILY_API_KEY")
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
@@ -38,28 +38,38 @@ if SUPABASE_URL and SUPABASE_KEY:
 # --- FUNCIÓN IA ROBUSTA (VÍA OPENROUTER) ---
 def consultar_ia(prompt):
     if not GEMINI_API_KEY:
-        return "❌ Error: Falta API Key."
+        return "❌ Error: Falta API Key (OpenRouter)."
 
-    # Usamos OpenRouter como intermediario fiable para Gemini
     url = "https://openrouter.ai/api/v1/chat/completions"
     
     headers = {
         "Authorization": f"Bearer {GEMINI_API_KEY}",
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
+        # Opcional: Ayuda a OpenRouter a identificar tu app
+        "HTTP-Referer": "https://render.com",
+        "X-Title": "MinCYT Dashboard"
     }
     
-    # Usamos el modelo Gemini Flash gratuito a través de OpenRouter
+    # CAMBIO CLAVE: Usamos 'gemini-flash-1.5' que es más estable y barato
     data = {
-        "model": "google/gemini-pro-1.5", # O 'google/gemini-flash-1.5'
+        "model": "google/gemini-flash-1.5", 
         "messages": [{"role": "user", "content": prompt}]
     }
     
     try:
-        response = requests.post(url, json=data, headers=headers, timeout=20)
+        response = requests.post(url, json=data, headers=headers, timeout=30)
         
         if response.status_code == 200:
             return response.json()['choices'][0]['message']['content']
         else:
+            # Si falla Flash, probamos un fallback automático a Pro
+            print(f"⚠️ Flash falló ({response.status_code}), intentando con Pro...")
+            data["model"] = "google/gemini-pro-1.5"
+            response_retry = requests.post(url, json=data, headers=headers, timeout=30)
+            
+            if response_retry.status_code == 200:
+                return response_retry.json()['choices'][0]['message']['content']
+            
             return f"Error OpenRouter: {response.text}"
             
     except Exception as e:
@@ -144,6 +154,5 @@ async def chat(pregunta: str = Form(...), file: UploadFile = File(None)):
     PREGUNTA: "{pregunta}"
     """
     
-    # Usamos la nueva función robusta
     respuesta = consultar_ia(prompt)
     return {"respuesta": respuesta}
