@@ -22,7 +22,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- LLAVES ---
+# --- VARIABLES DE ENTORNO ---
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 TAVILY_API_KEY = os.environ.get("TAVILY_API_KEY")
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
@@ -30,19 +30,63 @@ SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 
 URL_CALENDARIO = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQiN48tufdUP4BDXv7cVrh80OI8Li2KqjXQ-4LalIFCJ9ZnMYHr3R4PvSrPDUsk_g/pub?output=csv"
 
-# --- CONEXIONES ---
+# --- CONEXIÓN SUPABASE ---
 supabase: Client = None
 if SUPABASE_URL and SUPABASE_KEY:
     try: supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
     except: pass
 
+# --- CONFIGURACIÓN IA (ESTRATEGIA ROBUSTA) ---
 model = None
-if GEMINI_API_KEY:
-    genai.configure(api_key=GEMINI_API_KEY)
-    try: model = genai.GenerativeModel('gemini-1.5-flash')
-    except: pass
 
-# --- FUNCIÓN DE SINCRONIZACIÓN (VERSION FINAL) ---
+def configurar_modelo():
+    """Busca y conecta automáticamente con el mejor modelo disponible."""
+    if not GEMINI_API_KEY:
+        print("⚠️ Falta GEMINI_API_KEY")
+        return None
+
+    try:
+        genai.configure(api_key=GEMINI_API_KEY)
+        
+        # Configuración de seguridad permisiva
+        safety = {
+            HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_ONLY_HIGH,
+            HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_ONLY_HIGH,
+            HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_ONLY_HIGH,
+            HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_ONLY_HIGH,
+        }
+
+        # Lista de intentos en orden de preferencia
+        candidatos = [
+            'gemini-1.5-flash',
+            'models/gemini-1.5-flash',
+            'gemini-1.5-pro',
+            'gemini-pro',
+            'models/gemini-pro'
+        ]
+
+        print("🔍 Buscando modelo Gemini compatible...")
+        for nombre in candidatos:
+            try:
+                m = genai.GenerativeModel(nombre, safety_settings=safety)
+                # Prueba rápida de conexión
+                m.generate_content("Ping")
+                print(f"✅ IA Conectada exitosamente con: {nombre}")
+                return m
+            except:
+                continue
+        
+        print("❌ No se pudo conectar con ningún modelo estándar.")
+        return None
+
+    except Exception as e:
+        print(f"Error fatal configurando IA: {e}")
+        return None
+
+# Inicializamos el modelo al arrancar
+model = configurar_modelo()
+
+# --- SINCRONIZACIÓN (CALENDARIO) ---
 @app.post("/api/sync")
 def sincronizar():
     if not supabase: return {"status": "error", "msg": "Falta conexión a Supabase"}
@@ -53,7 +97,7 @@ def sincronizar():
         r.encoding = 'utf-8'
         df = pd.read_csv(io.BytesIO(r.content))
         
-        # 1. Normalizar cabeceras
+        # Normalización
         df.columns = [c.lower().strip() for c in df.columns]
         
         traduccion = {
@@ -69,42 +113,32 @@ def sincronizar():
         }
         df.rename(columns=traduccion, inplace=True)
         
-        # 2. LIMPIEZA AGRESIVA DE DATOS (Aquí estaba el fallo)
-        # Primero convertimos Infinitos a NaN
+        # Limpieza anti-errores
         df.replace([np.inf, -np.inf], np.nan, inplace=True)
-        
-        # La técnica definitiva: `where` reemplaza todo lo que sea NaN por None
-        # Esto es mucho más seguro que .replace para JSON
         df = df.where(pd.notnull(df), None)
         
-        # 3. Formateo de Fechas
         for col in ["fecha_inicio", "fecha_fin"]:
             if col in df.columns:
-                # Coerce convierte errores en NaT (Not a Time)
                 df[col] = pd.to_datetime(df[col], dayfirst=True, errors='coerce').dt.strftime('%Y-%m-%d')
-                # Limpiamos los NaT que hayan quedado
                 df[col] = df[col].replace({np.nan: None})
 
-        # 4. Filtrar y Guardar
+        # Filtrar y Guardar
         cols_validas = ["nac_intl", "titulo", "fecha_inicio", "fecha_fin", "lugar", "organizador", "pagan", "participante", "observaciones"]
         df_final = df[[c for c in df.columns if c in cols_validas]]
         
         datos = df_final.to_dict(orient='records')
         
-        # Borrón y cuenta nueva
         supabase.table("calendario_internacional").delete().neq("id", 0).execute()
-        
         if datos:
             supabase.table("calendario_internacional").insert(datos).execute()
             
-        return {"status": "ok", "msg": f"¡Éxito! {len(datos)} eventos guardados."}
+        return {"status": "ok", "msg": f"¡Éxito! {len(datos)} eventos actualizados."}
         
     except Exception as e:
         print(f"❌ Error Sync: {e}")
-        # Devolvemos el error detallado para verlo en el alerta del frontend
         return {"status": "error", "msg": f"Error procesando datos: {str(e)}"}
 
-# --- ENDPOINTS DE DATOS ---
+# --- ENDPOINTS ---
 @app.get("/api/data")
 def get_data():
     if not supabase: return []
@@ -114,16 +148,26 @@ def get_data():
 
 @app.post("/api/chat")
 async def chat(pregunta: str = Form(...), file: UploadFile = File(None)):
-    if not model: return {"respuesta": "Error: IA no disponible."}
+    global model
     
+    # Reintento de conexión si falló al inicio
+    if not model:
+        print("🔄 Reintentando conectar IA...")
+        model = configurar_modelo()
+    
+    if not model: return {"respuesta": "Error: No se pudo conectar con la IA de Google. Revisa los logs del servidor."}
+    
+    # Contexto Datos
     data = get_data()
-    ctx_db = tabulate(data, headers="keys", tablefmt="github") if data else "(Sin datos)"
+    ctx_db = tabulate(data, headers="keys", tablefmt="github") if data else "(Sin datos en Calendario)"
     
+    # Contexto Web
     ctx_web = ""
     if TAVILY_API_KEY:
         try: ctx_web = str(TavilyClient(api_key=TAVILY_API_KEY).search(pregunta, max_results=2))
         except: pass
 
+    # Contexto PDF
     ctx_pdf = ""
     if file:
         try:
@@ -135,17 +179,24 @@ async def chat(pregunta: str = Form(...), file: UploadFile = File(None)):
     prompt = f"""
     Eres el Asistente Oficial del MinCYT.
     
-    CALENDARIO (DB):
+    FUENTE 1: CALENDARIO INTERNACIONAL (Base de Datos):
     {ctx_db}
     
-    OTRAS FUENTES:
-    - PDF: {ctx_pdf}
-    - Web: {ctx_web}
+    FUENTE 2: INTERNET:
+    {ctx_web}
     
-    Consulta: {pregunta}
+    FUENTE 3: PDF ADJUNTO:
+    {ctx_pdf}
+    
+    PREGUNTA: {pregunta}
+    
+    INSTRUCCIONES:
+    - Si preguntan por eventos, usa la FUENTE 1.
+    - Si hay PDF, úsalo.
+    - Sé directo y útil.
     """
     
     try:
         res = model.generate_content(prompt)
         return {"respuesta": res.text}
-    except Exception as e: return {"respuesta": str(e)}
+    except Exception as e: return {"respuesta": f"Error generando respuesta: {str(e)}"}
