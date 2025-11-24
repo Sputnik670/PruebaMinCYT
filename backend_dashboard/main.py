@@ -22,7 +22,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- VARIABLES DE ENTORNO ---
+# --- VARIABLES ---
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 TAVILY_API_KEY = os.environ.get("TAVILY_API_KEY")
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
@@ -36,84 +36,71 @@ if SUPABASE_URL and SUPABASE_KEY:
     try: supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
     except: pass
 
-# --- CONFIGURACIÓN IA (ESTRATEGIA ROBUSTA) ---
+# --- CONFIGURACIÓN IA (CON DIAGNÓSTICO) ---
 model = None
+last_error = "Iniciando..." # Variable para guardar el error y mostrarlo en el chat
 
 def configurar_modelo():
-    """Busca y conecta automáticamente con el mejor modelo disponible."""
+    global last_error
     if not GEMINI_API_KEY:
-        print("⚠️ Falta GEMINI_API_KEY")
+        last_error = "Falta la GEMINI_API_KEY en las variables de entorno."
+        print(f"⚠️ {last_error}")
         return None
 
     try:
         genai.configure(api_key=GEMINI_API_KEY)
-        
-        # Configuración de seguridad permisiva
-        safety = {
-            HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_ONLY_HIGH,
-            HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_ONLY_HIGH,
-            HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_ONLY_HIGH,
-            HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_ONLY_HIGH,
-        }
+        safety = {HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_ONLY_HIGH}
 
-        # Lista de intentos en orden de preferencia
+        # Intentamos con varios nombres por si acaso
         candidatos = [
             'gemini-1.5-flash',
-            'models/gemini-1.5-flash',
             'gemini-1.5-pro',
             'gemini-pro',
-            'models/gemini-pro'
+            'models/gemini-1.5-flash'
         ]
 
-        print("🔍 Buscando modelo Gemini compatible...")
+        errores_acumulados = []
         for nombre in candidatos:
             try:
                 m = genai.GenerativeModel(nombre, safety_settings=safety)
-                # Prueba rápida de conexión
-                m.generate_content("Ping")
-                print(f"✅ IA Conectada exitosamente con: {nombre}")
+                m.generate_content("Ping") # Prueba de fuego
+                print(f"✅ IA Conectada: {nombre}")
                 return m
-            except:
+            except Exception as e:
+                errores_acumulados.append(f"{nombre}: {str(e)}")
                 continue
         
-        print("❌ No se pudo conectar con ningún modelo estándar.")
+        last_error = "Fallaron todos los modelos. Detalles: " + " | ".join(errores_acumulados)
+        print(f"❌ {last_error}")
         return None
 
     except Exception as e:
-        print(f"Error fatal configurando IA: {e}")
+        last_error = f"Error fatal en configuración: {str(e)}"
+        print(f"💀 {last_error}")
         return None
 
-# Inicializamos el modelo al arrancar
+# Inicializar
 model = configurar_modelo()
 
-# --- SINCRONIZACIÓN (CALENDARIO) ---
+# --- SINCRONIZACIÓN ---
 @app.post("/api/sync")
 def sincronizar():
     if not supabase: return {"status": "error", "msg": "Falta conexión a Supabase"}
-    
     try:
-        print("📥 Descargando Excel...")
         r = requests.get(URL_CALENDARIO)
         r.encoding = 'utf-8'
         df = pd.read_csv(io.BytesIO(r.content))
         
-        # Normalización
         df.columns = [c.lower().strip() for c in df.columns]
-        
         traduccion = {
-            "nac/intl": "nac_intl",
-            "título": "titulo", "titulo": "titulo",
-            "fecha inicio": "fecha_inicio",
-            "fecha fin": "fecha_fin",
-            "lugar": "lugar",
-            "organizador": "organizador",
+            "nac/intl": "nac_intl", "título": "titulo", "titulo": "titulo",
+            "fecha inicio": "fecha_inicio", "fecha fin": "fecha_fin",
+            "lugar": "lugar", "organizador": "organizador",
             "¿pagan?": "pagan", "pagan": "pagan",
-            "participante": "participante",
-            "observaciones": "observaciones"
+            "participante": "participante", "observaciones": "observaciones"
         }
         df.rename(columns=traduccion, inplace=True)
         
-        # Limpieza anti-errores
         df.replace([np.inf, -np.inf], np.nan, inplace=True)
         df = df.where(pd.notnull(df), None)
         
@@ -122,52 +109,44 @@ def sincronizar():
                 df[col] = pd.to_datetime(df[col], dayfirst=True, errors='coerce').dt.strftime('%Y-%m-%d')
                 df[col] = df[col].replace({np.nan: None})
 
-        # Filtrar y Guardar
-        cols_validas = ["nac_intl", "titulo", "fecha_inicio", "fecha_fin", "lugar", "organizador", "pagan", "participante", "observaciones"]
-        df_final = df[[c for c in df.columns if c in cols_validas]]
-        
-        datos = df_final.to_dict(orient='records')
+        cols = ["nac_intl", "titulo", "fecha_inicio", "fecha_fin", "lugar", "organizador", "pagan", "participante", "observaciones"]
+        df = df[[c for c in df.columns if c in cols]]
+        datos = df.to_dict(orient='records')
         
         supabase.table("calendario_internacional").delete().neq("id", 0).execute()
-        if datos:
-            supabase.table("calendario_internacional").insert(datos).execute()
+        if datos: supabase.table("calendario_internacional").insert(datos).execute()
             
         return {"status": "ok", "msg": f"¡Éxito! {len(datos)} eventos actualizados."}
-        
     except Exception as e:
-        print(f"❌ Error Sync: {e}")
-        return {"status": "error", "msg": f"Error procesando datos: {str(e)}"}
+        return {"status": "error", "msg": f"Error Sync: {str(e)}"}
 
 # --- ENDPOINTS ---
 @app.get("/api/data")
 def get_data():
     if not supabase: return []
-    try: 
-        return supabase.table("calendario_internacional").select("*").order("fecha_inicio", desc=False).execute().data
+    try: return supabase.table("calendario_internacional").select("*").order("fecha_inicio", desc=False).execute().data
     except: return []
 
 @app.post("/api/chat")
 async def chat(pregunta: str = Form(...), file: UploadFile = File(None)):
-    global model
+    global model, last_error
     
-    # Reintento de conexión si falló al inicio
     if not model:
-        print("🔄 Reintentando conectar IA...")
         model = configurar_modelo()
     
-    if not model: return {"respuesta": "Error: No se pudo conectar con la IA de Google. Revisa los logs del servidor."}
+    if not model:
+        # AQUÍ ESTÁ EL CAMBIO: Devolvemos el error real al usuario
+        return {"respuesta": f"❌ DIAGNÓSTICO DE ERROR: {last_error}"}
     
-    # Contexto Datos
+    # Contextos
     data = get_data()
-    ctx_db = tabulate(data, headers="keys", tablefmt="github") if data else "(Sin datos en Calendario)"
+    ctx_db = tabulate(data, headers="keys", tablefmt="github") if data else "(Sin datos)"
     
-    # Contexto Web
     ctx_web = ""
     if TAVILY_API_KEY:
         try: ctx_web = str(TavilyClient(api_key=TAVILY_API_KEY).search(pregunta, max_results=2))
         except: pass
 
-    # Contexto PDF
     ctx_pdf = ""
     if file:
         try:
@@ -177,26 +156,15 @@ async def chat(pregunta: str = Form(...), file: UploadFile = File(None)):
         except: pass
 
     prompt = f"""
-    Eres el Asistente Oficial del MinCYT.
-    
-    FUENTE 1: CALENDARIO INTERNACIONAL (Base de Datos):
-    {ctx_db}
-    
-    FUENTE 2: INTERNET:
-    {ctx_web}
-    
-    FUENTE 3: PDF ADJUNTO:
-    {ctx_pdf}
-    
+    Eres el Asistente MinCYT.
+    CALENDARIO (DB): {ctx_db}
+    WEB: {ctx_web}
+    PDF: {ctx_pdf}
     PREGUNTA: {pregunta}
-    
-    INSTRUCCIONES:
-    - Si preguntan por eventos, usa la FUENTE 1.
-    - Si hay PDF, úsalo.
-    - Sé directo y útil.
     """
     
     try:
         res = model.generate_content(prompt)
         return {"respuesta": res.text}
-    except Exception as e: return {"respuesta": f"Error generando respuesta: {str(e)}"}
+    except Exception as e:
+        return {"respuesta": f"Error generando respuesta: {str(e)}"}
