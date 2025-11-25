@@ -11,7 +11,7 @@ from tools.email import crear_borrador_email
 # 1. Configuración del Modelo (Google Gemini Oficial)
 # Asegúrate de tener GOOGLE_API_KEY en las variables de entorno de Render
 llm = ChatGoogleGenerativeAI(
-    model="gemini-1.5-flash",
+    model="gemini-pro",
     temperature=0,
     max_retries=2,
 )
