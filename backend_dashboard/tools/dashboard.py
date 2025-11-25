@@ -2,46 +2,51 @@ import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 import os
 import json
-import base64
 from langchain.tools import tool
 
-# TU ID EXACTO (Confirmado)
+# TU ID EXACTO
 SPREADSHEET_ID = "1Sm2icTOvSbmGD7mdUtl2DfflUZqoHpBW"
 
 def autenticar_google_sheets():
-    """Autentica usando la variable de entorno BASE64 con corrección de saltos de línea"""
+    """
+    Autentica construyendo el diccionario de credenciales manualmente 
+    desde variables de entorno individuales. (A prueba de fallos de JSON)
+    """
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
     
     try:
-        # 1. Buscamos la variable blindada
-        creds_base64 = os.getenv("GOOGLE_CREDENTIALS_BASE64")
+        # 1. Leemos las variables sueltas
+        private_key = os.getenv("GOOGLE_PRIVATE_KEY")
+        client_email = os.getenv("GOOGLE_CLIENT_EMAIL")
         
-        if not creds_base64:
-            print("⚠️ Error: No existe la variable GOOGLE_CREDENTIALS_BASE64")
+        if not private_key or not client_email:
+            print("⚠️ Faltan las variables GOOGLE_PRIVATE_KEY o GOOGLE_CLIENT_EMAIL")
             return None
-            
-        # 2. La desciframos (De Base64 a JSON texto)
-        creds_json_str = base64.b64decode(creds_base64).decode("utf-8")
+
+        # 2. Construimos el diccionario en memoria
+        # IMPORTANTE: El .replace es vital para arreglar el formato que viene de Render
+        creds_dict = {
+            "type": "service_account",
+            "project_id": "dashboard-impacto-478615", # No es critico para auth, pero lo ponemos
+            "private_key_id": "cualquier_id", # No es critico
+            "private_key": private_key.replace("\\n", "\n"),
+            "client_email": client_email,
+            "client_id": "116197238257458301101", # No es critico
+            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+            "token_uri": "https://oauth2.googleapis.com/token",
+            "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+            "client_x509_cert_url": f"https://www.googleapis.com/robot/v1/metadata/x509/{client_email.replace('@', '%40')}"
+        }
         
-        # 3. La convertimos a Diccionario
-        creds_dict = json.loads(creds_json_str)
-        
-        # --- EL FIX DE ORO ---
-        # Esto busca los "\n" falsos y los convierte en Enters reales.
-        # Es OBLIGATORIO si el Base64 se generó en Windows.
-        if "private_key" in creds_dict:
-            creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
-        
-        # 4. Autenticamos
+        # 3. Autenticamos
         creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
         return gspread.authorize(creds)
         
     except Exception as e:
-        print(f"Error crítico desencriptando credenciales: {e}")
+        print(f"Error crítico autenticando: {e}")
         return None
 
 def obtener_datos_raw():
-    """Función para obtener los datos crudos (para la tabla visual)"""
     try:
         client = autenticar_google_sheets()
         if not client: return []
