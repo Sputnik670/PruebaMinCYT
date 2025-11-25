@@ -1,7 +1,10 @@
 import os
 import json
 import gspread
+import io 
+import csv 
 from google.oauth2 import service_account
+from googleapiclient.discovery import build 
 from langchain.tools import tool
 
 # --- CONFIGURACIÓN ---
@@ -9,8 +12,8 @@ SPREADSHEET_ID = "1Sm2icTOvSbmGD7mdUtl2DfflUZqoHpBW"
 
 def autenticar_google_sheets():
     """
-    Autentica con Google Sheets usando variables de entorno de Render.
-    Incluye corrección de formato de clave privada y logs de debug.
+    Autentica con Google Sheets/Drive usando variables de entorno.
+    Devuelve un cliente gspread que contiene las credenciales necesarias.
     """
     scope = [
         "https://www.googleapis.com/auth/spreadsheets",
@@ -63,42 +66,56 @@ def autenticar_google_sheets():
 
 def obtener_datos_raw():
     """
-    Lee los datos crudos (sin encabezados automáticos) y los procesa, 
-    usando la Fila 2 como encabezado de manera explícita para evitar errores de formato.
+    Solución robusta para XLSX: Usa la API de Drive para descargar el archivo 
+    como CSV y luego lo procesa. Esto evita el error 400 'not supported for this document'.
     """
     try:
-        # Se asume que 'autenticar_google_sheets()' está definido en este archivo.
+        # La función de autenticación devuelve el cliente gspread, que contiene las credenciales
         client = autenticar_google_sheets()
         if not client: return []
         
-        sheet = client.open_by_key(SPREADSHEET_ID).sheet1
+        # Obtenemos las credenciales del objeto cliente para el servicio de Drive
+        creds = client.credentials 
+
+        # 1. Inicializar el servicio de Drive para manejar el archivo XLSX
+        service = build('drive', 'v3', credentials=creds)
+
+        # 2. Exportar el archivo XLSX (usando SPREADSHEET_ID como File ID) a formato CSV
+        file_id = SPREADSHEET_ID 
+        # Esta es la magia que permite leer un XLSX
+        request = service.files().export_media(fileId=file_id, 
+                                              mimeType='text/csv')
         
-        # 1. Obtenemos TODOS los valores como lista de listas
-        # Este método no se rompe por celdas combinadas.
-        all_data = sheet.get_all_values()
+        # 3. Descargar el contenido
+        downloaded_file = request.execute()
+
+        # 4. Procesar el CSV en Python (la salida del CSV es UTF-8)
+        file_io = io.StringIO(downloaded_file.decode('utf-8'))
+        reader = csv.reader(file_io)
         
-        # Si la hoja está vacía o tiene menos de dos filas
-        if not all_data or len(all_data) < 2:
+        # Extraer filas
+        data = list(reader)
+        if not data or len(data) < 2:
             return []
-            
-        # 2. Definimos que los encabezados son la Fila 2 (índice 1)
-        headers = [h for h in all_data[1] if h] # Solo tomamos encabezados no vacíos
-        data_rows = all_data[2:] # Los datos empiezan desde la Fila 3 (índice 2)
         
-        # 3. Mapeamos los datos y evitamos las filas vacías entre meses
+        # 5. Mapear datos (Encabezados en Fila 2 - índice 1)
+        headers = [h for h in data[1] if h] # Solo tomamos encabezados no vacíos
+        data_rows = data[2:]
         results = []
+        
         for row in data_rows:
             # Solo procesa si la fila tiene algún dato
-            if any(row): 
+            if any(row):
                 # Mapeamos la fila de datos con los encabezados
                 processed_row = row[:len(headers)]
-                results.append(dict(zip(headers, processed_row)))
+                # Solo agregamos si la lista de datos coincide con los encabezados
+                if len(processed_row) == len(headers):
+                    results.append(dict(zip(headers, processed_row)))
         
         return results
 
     except Exception as e:
-        # Esto imprimirá el error real si no es de autenticación
-        print(f"❌ Error leyendo datos del sheet (Método Robusto): {str(e)}")
+        print(f"❌ Error leyendo datos con Drive API: {str(e)}")
         return []
 
 @tool
@@ -112,6 +129,7 @@ def consultar_calendario(consulta: str):
         datos = obtener_datos_raw()
         
         if not datos:
+            # La tabla no contiene datos (Error 400 o tabla vacía)
             return "Error: No se pudieron obtener datos del calendario (ver logs)."
         
         # Tomamos una muestra de 15 items para no saturar el chat
@@ -119,4 +137,5 @@ def consultar_calendario(consulta: str):
         return f"Datos del Calendario:\n{json.dumps(muestra, indent=2, ensure_ascii=False)}"
     
     except Exception as e:
+        # Esto captura cualquier error de procesamiento que quede
         return f"Excepción en herramienta: {str(e)}"
