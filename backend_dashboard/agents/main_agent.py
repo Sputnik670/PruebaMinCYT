@@ -1,7 +1,7 @@
 from langchain_openai import ChatOpenAI
 from langchain.agents import AgentExecutor, create_openai_functions_agent
 from langchain.tools import Tool
-from langchain.hub import hub
+from langchain import hub
 
 from core.config import settings
 from tools.general import get_search_tool
