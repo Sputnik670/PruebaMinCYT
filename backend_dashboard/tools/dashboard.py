@@ -1,107 +1,65 @@
 import os
 import json
-import gspread
-from google.oauth2 import service_account
+from supabase import create_client, Client
 from langchain.tools import tool
 
-# --- CONFIGURACIÓN ACTUALIZADA ---
-# Nuevo ID extraído de tu enlace
-SPREADSHEET_ID = "1lkViCdCeq7F4yEHVdbjfrV-G7KvKP6TZfxsOc-Ov4xI"
-WORKSHEET_GID = 563858184  # Mantenemos el GID que venía en la URL
+# --- CONFIGURACIÓN SUPABASE ---
+# Estas variables deben estar en Render
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+SUPABASE_CLIENT: Client = create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_URL and SUPABASE_KEY else None
 
-def autenticar_google_sheets():
-    """Autenticación con Google Sheets usando variables de entorno."""
-    scope = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
-    try:
-        private_key = os.getenv("GOOGLE_PRIVATE_KEY")
-        client_email = os.getenv("GOOGLE_CLIENT_EMAIL")
-        
-        if not private_key or not client_email:
-            print("⚠️ ERROR: Faltan credenciales en .env")
-            return None
-
-        creds_dict = {
-            "type": "service_account",
-            "project_id": "dashboard-impacto-478615",
-            "private_key_id": "indefinido",
-            "private_key": private_key.replace("\\n", "\n"),
-            "client_email": client_email,
-            "client_id": "116197238257458301101",
-            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-            "token_uri": "https://oauth2.googleapis.com/token",
-            "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
-            "client_x509_cert_url": f"https://www.googleapis.com/robot/v1/metadata/x509/{client_email}"
-        }
-        creds = service_account.Credentials.from_service_account_info(creds_dict, scopes=scope)
-        return gspread.authorize(creds)
-    except Exception as e:
-        print(f"❌ Error autenticación: {e}")
-        return None
+# Variable de estado para la caché (Caché en memoria por 5 minutos)
+CACHE = {"data": [], "timestamp": 0}
+CACHE_DURATION = 300 # 5 minutos en segundos
 
 def obtener_datos_raw():
-    """Recupera datos de la hoja y maneja errores de filas vacías."""
-    print(f"--- INTENTANDO LEER GOOGLE SHEET (ID: {SPREADSHEET_ID}) ---")
-    client = autenticar_google_sheets()
-    if not client:
+    """
+    Obtiene datos de la tabla 'calendario' de Supabase (con caché).
+    """
+    global CACHE
+
+    if not SUPABASE_CLIENT:
+        print("❌ ERROR: Cliente Supabase no inicializado. Faltan variables de entorno.")
         return []
 
+    # Verificar caché
+    if CACHE["timestamp"] > (os.time() - CACHE_DURATION):
+        print("ℹ️ Datos servidos desde la caché.")
+        return CACHE["data"]
+
+    print("--- CONSULTANDO SUPABASE ---")
     try:
-        # Abrir documento
-        sh = client.open_by_key(SPREADSHEET_ID)
+        # Consulta de ejemplo: trae todos los eventos (se puede mejorar con filtros)
+        response = SUPABASE_CLIENT.table('calendario').select("*").execute()
         
-        # Intentar abrir la hoja por ID, si falla, abre la primera
-        try:
-            worksheet = sh.get_worksheet_by_id(WORKSHEET_GID)
-            if not worksheet: raise Exception("Hoja no encontrada")
-            print(f"✔ Pestaña '{worksheet.title}' cargada correctamente.")
-        except:
-            print(f"⚠️ No se encontró la hoja con GID {WORKSHEET_GID}, abriendo la primera hoja...")
-            worksheet = sh.sheet1
-
-        data = worksheet.get_all_values()
+        datos = response.data
         
-        if len(data) < 2:
-            print("⚠️ La hoja está vacía o tiene muy pocos datos.")
-            return []
-
-        # --- LÓGICA INTELIGENTE DE ENCABEZADOS ---
-        # Buscamos la fila que contiene "Título" o "Title" para usarla de encabezado
-        header_index = 0
-        for i, row in enumerate(data[:5]): # Mira las primeras 5 filas
-            row_str = [str(c).lower() for c in row]
-            # Palabras clave para encontrar dónde empieza la tabla real
-            if "título" in row_str or "titulo" in row_str or "evento" in row_str:
-                header_index = i
-                break
+        # Actualizar caché
+        CACHE["data"] = datos
+        CACHE["timestamp"] = os.time()
         
-        print(f"ℹ️ Encabezados detectados en la fila {header_index + 1}")
-        
-        headers = data[header_index]
-        filas = data[header_index + 1:]
-        
-        resultados = []
-        for row in filas:
-            # Filtramos filas totalmente vacías
-            if not any(field.strip() for field in row):
-                continue
-            
-            # Rellenar si la fila es más corta que los headers
-            if len(row) < len(headers):
-                row += [""] * (len(headers) - len(row))
-            
-            # Crear diccionario seguro
-            item = {str(headers[i]): str(row[i]) for i in range(len(headers)) if i < len(row)}
-            resultados.append(item)
-
-        print(f"✔ Datos procesados: {len(resultados)} filas enviadas al frontend.")
-        return resultados
+        print(f"✔ Datos cargados de Supabase: {len(datos)} filas")
+        return datos
 
     except Exception as e:
-        print(f"❌ ERROR LEYENDO SHEET: {str(e)}")
+        print(f"❌ Error al leer los datos de Supabase: {str(e)}")
         return []
+
 
 @tool
 def consultar_calendario(consulta: str):
-    """Consulta eventos del calendario."""
-    datos = obtener_datos_raw()
-    return json.dumps(datos[:10], ensure_ascii=False)
+    """
+    Herramienta para consultar agenda y eventos del calendario.
+    """
+    try:
+        print("🔍 Ejecutando herramienta consultar_calendario()...")
+        datos = obtener_datos_raw()
+
+        if not datos:
+            return "No se pudieron obtener datos del calendario."
+
+        return json.dumps(datos[:15], indent=2, ensure_ascii=False)
+
+    except Exception as e:
+        return f"Excepción en herramienta: {str(e)}"

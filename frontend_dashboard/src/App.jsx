@@ -90,26 +90,84 @@ function App() {
   );
 }
 
+// ... (mantenemos los imports y el componente App original)
+
 const ChatBotWidget = ({ apiUrl }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [messages, setMessages] = useState([{ sender: 'bot', text: 'Hola. ¿Qué necesitas saber?' }]);
   const [input, setInput] = useState('');
+  const [isListening, setIsListening] = useState(false); // <--- NUEVO ESTADO
   const msgsRef = useRef(null);
 
   useEffect(() => msgsRef.current?.scrollIntoView({ behavior: "smooth" }), [messages, isOpen]);
 
-  const send = async () => {
-    if (!input) return;
-    const txt = input; setInput('');
+  const send = async (textToSend) => {
+    const txt = textToSend || input;
+    if (!txt) return;
+    setInput('');
     setMessages(p => [...p, { sender: 'user', text: txt }]);
+    
+    // Aquí es donde harías la transición de capa (UX: Bot pensando)
+    setMessages(p => [...p, { sender: 'bot', text: '...pensando...' }]); 
+    
     try {
       const res = await fetch(`${apiUrl}/api/chat`, { 
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message: txt }) 
       });
       const dat = await res.json();
-      setMessages(p => [...p, { sender: 'bot', text: dat.response }]);
-    } catch (e) { setMessages(p => [...p, { sender: 'bot', text: "Error de conexión." }]); }
+      
+      // Reemplaza el mensaje '...pensando...' con la respuesta final
+      setMessages(p => {
+          const newMsgs = p.slice(0, -1); // Quita el último mensaje (el de pensando)
+          return [...newMsgs, { sender: 'bot', text: dat.response }];
+      });
+    } catch (e) { 
+      setMessages(p => {
+          const newMsgs = p.slice(0, -1);
+          return [...newMsgs, { sender: 'bot', text: "Error de conexión o el agente falló." }];
+      });
+    }
   };
+
+  // --- LÓGICA DE VOZ A TEXTO (SpeechRecognition API) ---
+  const startListening = () => {
+    if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
+      alert("Tu navegador no soporta el reconocimiento de voz.");
+      return;
+    }
+
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    const recognition = new SpeechRecognition();
+    recognition.lang = 'es-ES'; // Idioma
+
+    recognition.onstart = () => {
+      setIsListening(true);
+      setInput("Escuchando...");
+    };
+
+    recognition.onresult = (event) => {
+      const transcript = event.results[0][0].transcript;
+      setInput(transcript);
+      recognition.stop();
+      send(transcript); // Envía la transcripción inmediatamente
+    };
+
+    recognition.onend = () => {
+      setIsListening(false);
+      if (input === "Escuchando...") setInput(''); // Si el usuario no dijo nada
+    };
+
+    recognition.onerror = (event) => {
+      console.error(event.error);
+      setIsListening(false);
+      setInput('');
+      alert("Error en reconocimiento de voz: " + event.error);
+    };
+
+    recognition.start();
+  };
+  // --- FIN LÓGICA V2T ---
+
 
   return (
     <div style={{ position: 'fixed', bottom: 20, right: 20, zIndex: 9999 }}>
@@ -125,8 +183,23 @@ const ChatBotWidget = ({ apiUrl }) => {
                 <div ref={msgsRef}></div>
             </div>
             <div style={{padding:10, display:'flex'}}>
-                <input value={input} onChange={e=>setInput(e.target.value)} onKeyDown={e=>e.key==='Enter'&&send()} style={{flex:1, padding:10, borderRadius:4, border:'none'}} placeholder="Escribe..." />
-                <button onClick={send} style={{marginLeft:5, padding:'0 15px'}}>➤</button>
+                <input 
+                    value={input} 
+                    onChange={e=>setInput(e.target.value)} 
+                    onKeyDown={e=>e.key==='Enter'&&send()} 
+                    style={{flex:1, padding:10, borderRadius:4, border:'none'}} 
+                    placeholder={isListening ? 'Habla ahora...' : "Escribe o usa el micrófono..."}
+                    disabled={isListening} 
+                />
+                
+                {/* BOTÓN DE VOZ O ENVIAR */}
+                {input.length > 0 && input !== 'Escuchando...' ? (
+                    <button onClick={() => send()} style={{marginLeft:5, padding:'0 15px'}}>➤</button>
+                ) : (
+                    <button onClick={startListening} disabled={isListening} style={{marginLeft:5, padding:'0 15px', background: isListening ? '#f44336' : '#646cff'}}>
+                       {isListening ? '🔴' : '🎤'}
+                    </button>
+                )}
             </div>
         </div>
       )}
