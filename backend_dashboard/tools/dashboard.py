@@ -68,21 +68,21 @@ def autenticar_google_sheets():
         return None
 
 def obtener_datos_raw():
-    # ... código de autenticación
+    """
+    Obtiene todos los registros de la Hoja 1, usando la Fila 2 como encabezado.
+    """
     try:
         client = autenticar_google_sheets()
         if not client: return []
         
         sheet = client.open_by_key(SPREADSHEET_ID).sheet1
         
-        # --- CAMBIA ESTA LÍNEA ---
-        # Antes: return sheet.get_all_records()
-        
-        # AHORA: Con el parámetro 'head=2' para usar la Fila 2 como encabezado
+        # Leemos los datos usando la Fila 2 (head=2) como títulos
         return sheet.get_all_records(head=2) 
         
     except Exception as e:
-    # ... código de error
+        print(f"❌ Error leyendo datos del sheet: {str(e)}")
+        return []
 
 @tool
 def consultar_calendario(consulta: str):
