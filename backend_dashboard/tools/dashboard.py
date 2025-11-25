@@ -1,65 +1,81 @@
 import os
 import json
-from supabase import create_client, Client
+import gspread
+from google.oauth2 import service_account
 from langchain.tools import tool
 
-# --- CONFIGURACIÓN SUPABASE ---
-# Estas variables deben estar en Render
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-SUPABASE_CLIENT: Client = create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_URL and SUPABASE_KEY else None
+# ID del Sheet Nativo (el que creamos y funcionaba)
+SPREADSHEET_ID = "1lkViCdCeq7F4yEHVdbjfrV-G7KvKP6TZfxsOc-Ov4xI"
+WORKSHEET_GID = 563858184
 
-# Variable de estado para la caché (Caché en memoria por 5 minutos)
-CACHE = {"data": [], "timestamp": 0}
-CACHE_DURATION = 300 # 5 minutos en segundos
+def autenticar_google_sheets():
+    scope = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
+    try:
+        private_key = os.getenv("GOOGLE_PRIVATE_KEY")
+        client_email = os.getenv("GOOGLE_CLIENT_EMAIL")
+        if not private_key or not client_email: return None
+        
+        creds_dict = {
+            "type": "service_account",
+            "project_id": "dashboard-impacto-478615",
+            "private_key_id": "indefinido",
+            "private_key": private_key.replace("\\n", "\n"),
+            "client_email": client_email,
+            "client_id": "116197238257458301101",
+            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+            "token_uri": "https://oauth2.googleapis.com/token",
+            "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+            "client_x509_cert_url": f"https://www.googleapis.com/robot/v1/metadata/x509/{client_email}"
+        }
+        creds = service_account.Credentials.from_service_account_info(creds_dict, scopes=scope)
+        return gspread.authorize(creds)
+    except Exception as e:
+        print(f"Error Auth Google: {e}")
+        return None
 
 def obtener_datos_raw():
-    """
-    Obtiene datos de la tabla 'calendario' de Supabase (con caché).
-    """
-    global CACHE
-
-    if not SUPABASE_CLIENT:
-        print("❌ ERROR: Cliente Supabase no inicializado. Faltan variables de entorno.")
-        return []
-
-    # Verificar caché
-    if CACHE["timestamp"] > (os.time() - CACHE_DURATION):
-        print("ℹ️ Datos servidos desde la caché.")
-        return CACHE["data"]
-
-    print("--- CONSULTANDO SUPABASE ---")
+    print(f"--- LEYENDO GOOGLE SHEET ---")
     try:
-        # Consulta de ejemplo: trae todos los eventos (se puede mejorar con filtros)
-        response = SUPABASE_CLIENT.table('calendario').select("*").execute()
+        client = autenticar_google_sheets()
+        if not client: return []
         
-        datos = response.data
-        
-        # Actualizar caché
-        CACHE["data"] = datos
-        CACHE["timestamp"] = os.time()
-        
-        print(f"✔ Datos cargados de Supabase: {len(datos)} filas")
-        return datos
+        sh = client.open_by_key(SPREADSHEET_ID)
+        # Intento robusto de obtener hoja
+        try:
+            worksheet = sh.get_worksheet_by_id(WORKSHEET_GID)
+            if not worksheet: worksheet = sh.sheet1
+        except:
+            worksheet = sh.sheet1
 
+        data = worksheet.get_all_values()
+        if len(data) < 2: return []
+
+        # Buscador de encabezados simple
+        header_idx = 0
+        for i, row in enumerate(data[:5]):
+            row_s = [str(c).lower() for c in row]
+            if "título" in row_s or "titulo" in row_s:
+                header_idx = i
+                break
+        
+        headers = data[header_idx]
+        rows = data[header_idx+1:]
+        
+        res = []
+        for r in rows:
+            if not any(r): continue
+            # Normalizar longitud
+            if len(r) < len(headers): r += [""]*(len(headers)-len(r))
+            res.append(dict(zip(headers, r)))
+            
+        return res
     except Exception as e:
-        print(f"❌ Error al leer los datos de Supabase: {str(e)}")
+        print(f"Error Sheet: {e}")
         return []
-
 
 @tool
 def consultar_calendario(consulta: str):
-    """
-    Herramienta para consultar agenda y eventos del calendario.
-    """
-    try:
-        print("🔍 Ejecutando herramienta consultar_calendario()...")
-        datos = obtener_datos_raw()
-
-        if not datos:
-            return "No se pudieron obtener datos del calendario."
-
-        return json.dumps(datos[:15], indent=2, ensure_ascii=False)
-
-    except Exception as e:
-        return f"Excepción en herramienta: {str(e)}"
+    """Consulta la agenda/calendario del ministerio."""
+    data = obtener_datos_raw()
+    # Limitamos a 10 para no saturar la memoria del modelo gratis
+    return json.dumps(data[:10], ensure_ascii=False)
