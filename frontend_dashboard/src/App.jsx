@@ -16,7 +16,10 @@ function App() {
         if (!res.ok) throw new Error(`Error servidor: ${res.status}`);
         return res.json();
       })
-      .then(setData)
+      .then(datos => {
+        console.log("Datos recibidos:", datos); // Para ver en consola qué llega
+        setData(datos);
+      })
       .catch(console.error);
   };
 
@@ -27,10 +30,9 @@ function App() {
     setSyncing(true);
     try {
       const res = await fetch(`${API_URL}/api/sync`, { method: 'POST' });
-      const json = await res.json();
-      if(json.status === 'error') throw new Error(json.msg);
+      if(res.status !== 200) throw new Error("Error al conectar");
       
-      alert(json.msg || "¡Sincronización exitosa!");
+      alert("¡Datos actualizados correctamente!");
       cargarDatos(); 
     } catch (e) { 
       alert("Error al sincronizar: " + e.message); 
@@ -55,7 +57,7 @@ function App() {
         </button>
       </header>
 
-      {/* TABLA DE DATOS (Ahora con botón "Ver Más") */}
+      {/* TABLA DE DATOS */}
       <div style={{ background: '#1e1e1e', padding: 20, borderRadius: 12, overflowX: 'auto', boxShadow: '0 4px 10px rgba(0,0,0,0.3)' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 900 }}>
           <thead>
@@ -71,16 +73,39 @@ function App() {
           <tbody>
             {datosVisibles.map((row, i) => (
               <tr key={i} style={{ borderBottom: '1px solid #333' }}>
-                <td style={{padding:15, whiteSpace:'nowrap'}}>{row.fecha_inicio}</td>
-                <td style={{padding:15, fontWeight:'bold', color:'#fff'}}>{row.titulo}</td>
-                <td style={{padding:15}}>{row.lugar}</td>
+                
+                {/* 1. FECHA (Tu Excel dice "Fecha inicio") */}
+                <td style={{padding:15, whiteSpace:'nowrap'}}>
+                    {row['Fecha inicio'] || '-'}
+                </td>
+
+                {/* 2. EVENTO (Tu Excel dice "Título") */}
+                <td style={{padding:15, fontWeight:'bold', color:'#fff'}}>
+                    {row['Título'] || '-'}
+                </td>
+
+                {/* 3. LUGAR (Tu Excel dice "Lugar") */}
                 <td style={{padding:15}}>
-                  <span style={{background: row.nac_intl?.toLowerCase().includes('intl') ?'#4f46e5':'#059669', padding:'4px 8px', borderRadius:4, fontSize:'0.8em', fontWeight:'bold'}}>
-                    {row.nac_intl}
+                    {row['Lugar'] || '-'}
+                </td>
+
+                {/* 4. ÁMBITO (Tu Excel dice "Nac/Intl") */}
+                <td style={{padding:15}}>
+                  <span style={{background: '#059669', padding:'4px 8px', borderRadius:4, fontSize:'0.8em', fontWeight:'bold'}}>
+                    {row['Nac/Intl'] || 'N/A'}
                   </span>
                 </td>
-                <td style={{padding:15}}>{row.participante}</td>
-                <td style={{padding:15}}>{row.pagan}</td>
+
+                {/* 5. PARTICIPANTE (Tu Excel dice "Participante") */}
+                <td style={{padding:15}}>
+                    {row['Participante'] || '-'}
+                </td>
+
+                {/* 6. PAGAN (Tu Excel dice "¿Pagan?") */}
+                <td style={{padding:15}}>
+                    {row['¿Pagan?'] || '-'}
+                </td>
+
               </tr>
             ))}
           </tbody>
@@ -88,8 +113,8 @@ function App() {
         
         {/* Estado vacío */}
         {data.length === 0 && <div style={{padding:40, textAlign:'center', color:'#666'}}>
-          <h3>No hay datos cargados</h3>
-          <p>Presiona el botón verde para traer la información del Excel.</p>
+          <h3>Cargando datos...</h3>
+          <p>Si no aparecen en unos segundos, presiona el botón verde.</p>
         </div>}
 
         {/* Botón Desplegar/Contraer */}
@@ -113,7 +138,7 @@ function App() {
 
 const ChatBotWidget = ({ apiUrl }) => {
   const [isOpen, setIsOpen] = useState(false);
-  const [isExpanded, setIsExpanded] = useState(false); // Estado para tamaño gigante
+  const [isExpanded, setIsExpanded] = useState(false); 
   const [messages, setMessages] = useState([{ sender: 'bot', text: 'Hola. Tengo acceso al Calendario. ¿Qué necesitas saber?' }]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
@@ -123,36 +148,26 @@ const ChatBotWidget = ({ apiUrl }) => {
 
   useEffect(() => msgsRef.current?.scrollIntoView({ behavior: "smooth" }), [messages, isExpanded, isOpen]);
 
-  // --- FUNCIÓN SEND CORREGIDA Y LIMPIA ---
   const send = async () => {
     if (!input && !file) return;
     
     const txt = input; 
     setInput('');
-    // Guardamos referencia al archivo pero NO lo enviamos todavía al backend
-    // hasta que lleguemos a la Fase 3 del backend.
     const f = file; 
     setFile(null);
     
-    // Agregamos mensaje del usuario al chat
     setMessages(p => [...p, { sender: 'user', text: txt, file: f?.name }]);
     setLoading(true);
 
     try {
-      // 1. Usamos JSON y el endpoint correcto
       const res = await fetch(`${apiUrl}/api/chat`, { 
         method: 'POST', 
-        headers: {
-          'Content-Type': 'application/json' 
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message: txt || "Hola" }) 
       });
 
       if (!res.ok) throw new Error("Error en la respuesta del servidor");
-
       const dat = await res.json();
-      
-      // 2. Leemos la respuesta correcta 'response'
       setMessages(p => [...p, { sender: 'bot', text: dat.response }]);
 
     } catch (error) {
@@ -161,54 +176,25 @@ const ChatBotWidget = ({ apiUrl }) => {
     }
     setLoading(false);
   };
-  // --- FIN DE LA FUNCIÓN SEND ---
 
-  // Estilos dinámicos
   const containerStyle = isExpanded ? 
     { width: '600px', height: '80vh', right: '20px', bottom: '20px' } : 
     { width: '350px', height: '500px', right: '20px', bottom: '20px' };
 
   return (
     <div style={{ position: 'fixed', zIndex: 9999, ...containerStyle, pointerEvents: 'none', display: 'flex', justifyContent: 'flex-end', alignItems: 'flex-end' }}>
-      
-      {/* Botón Flotante (Solo si está cerrado) */}
       {!isOpen && (
-        <button onClick={()=>setIsOpen(true)} style={{pointerEvents: 'auto', width:60, height:60, borderRadius:'50%', fontSize:30, cursor:'pointer', background:'#646cff', border:'none', boxShadow:'0 4px 12px rgba(0,0,0,0.3)', display:'flex', justifyContent:'center', alignItems:'center'}}>
-          💬
-        </button>
+        <button onClick={()=>setIsOpen(true)} style={{pointerEvents: 'auto', width:60, height:60, borderRadius:'50%', fontSize:30, cursor:'pointer', background:'#646cff', border:'none', boxShadow:'0 4px 12px rgba(0,0,0,0.3)', display:'flex', justifyContent:'center', alignItems:'center'}}>💬</button>
       )}
-
-      {/* Ventana de Chat */}
       {isOpen && (
-        <div style={{ 
-          width: '100%', 
-          height: '100%', 
-          background: '#222', 
-          borderRadius: 12, 
-          display:'flex', 
-          flexDirection:'column', 
-          border:'1px solid #444', 
-          overflow:'hidden', 
-          boxShadow:'0 10px 30px rgba(0,0,0,0.5)',
-          pointerEvents: 'auto',
-          transition: 'all 0.3s ease' // Animación suave al cambiar tamaño
-        }}>
+        <div style={{ width: '100%', height: '100%', background: '#222', borderRadius: 12, display:'flex', flexDirection:'column', border:'1px solid #444', overflow:'hidden', boxShadow:'0 10px 30px rgba(0,0,0,0.5)', pointerEvents: 'auto', transition: 'all 0.3s ease' }}>
           <div style={{padding:15, background:'#646cff', color:'white', display:'flex', justifyContent:'space-between', alignItems:'center'}}>
             <strong style={{fontSize: isExpanded ? '1.2rem' : '1rem'}}>Asistente IA</strong>
             <div style={{display:'flex', gap:10}}>
-              {/* Botón de ESTIRAR / CONTRAER */}
-              <button 
-                onClick={() => setIsExpanded(!isExpanded)} 
-                title={isExpanded ? "Achicar" : "Agrandar"}
-                style={{background:'rgba(0,0,0,0.2)', border:'none', color:'white', cursor:'pointer', borderRadius:4, padding:'2px 6px'}}
-              >
-                {isExpanded ? '📉' : 'square'}
-              </button>
-              {/* Botón de CERRAR */}
+              <button onClick={() => setIsExpanded(!isExpanded)} style={{background:'rgba(0,0,0,0.2)', border:'none', color:'white', cursor:'pointer', borderRadius:4, padding:'2px 6px'}}>{isExpanded ? '📉' : 'square'}</button>
               <button onClick={()=>setIsOpen(false)} style={{background:'none', border:'none', color:'white', cursor:'pointer', fontSize:'1.2rem'}}>✕</button>
             </div>
           </div>
-
           <div style={{flex:1, padding:15, overflowY:'auto', display:'flex', flexDirection:'column', gap:10}}>
             {messages.map((m,i) => (
               <div key={i} style={{alignSelf: m.sender==='user'?'flex-end':'flex-start', background: m.sender==='user'?'#4f46e5':'#333', padding:'10px 15px', borderRadius:10, color:'white', maxWidth:'85%', lineHeight:'1.4'}}>
@@ -219,9 +205,8 @@ const ChatBotWidget = ({ apiUrl }) => {
             {loading && <div style={{color:'#888', fontStyle:'italic'}}>Analizando...</div>}
             <div ref={msgsRef}></div>
           </div>
-
           <div style={{padding:10, borderTop:'1px solid #333', display:'flex', gap:5, background:'#1a1a1a'}}>
-            <button onClick={()=>fileRef.current.click()} style={{background:'#333', color:'white', border:'1px solid #444', borderRadius:4, width:40, cursor:'pointer'}} title="Adjuntar PDF">📎<input type="file" ref={fileRef} hidden onChange={e=>setFile(e.target.files[0])}/></button>
+            <button onClick={()=>fileRef.current.click()} style={{background:'#333', color:'white', border:'1px solid #444', borderRadius:4, width:40, cursor:'pointer'}}>📎<input type="file" ref={fileRef} hidden onChange={e=>setFile(e.target.files[0])}/></button>
             {file && <span style={{fontSize:10, color:'#aaa', alignSelf:'center'}}>📄</span>}
             <input value={input} onChange={e=>setInput(e.target.value)} onKeyDown={e=>e.key==='Enter'&&send()} style={{flex:1, padding:10, borderRadius:4, border:'none', background:'#333', color:'white'}} placeholder="Escribe..." />
             <button onClick={send} style={{background:'#646cff', border:'none', borderRadius:4, color:'white', padding:'0 15px', cursor:'pointer'}}>➤</button>
