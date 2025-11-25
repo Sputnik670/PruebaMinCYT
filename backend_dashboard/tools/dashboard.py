@@ -47,6 +47,10 @@ def obtener_datos_raw():
 
 @tool
 def consultar_calendario(consulta: str):
+    """
+    Usa esta herramienta para consultar la agenda, eventos, fechas 
+    y lugares del calendario internacional del Ministerio.
+    """
     try:
         datos = obtener_datos_raw()
         if not datos: return "El calendario está vacío."
