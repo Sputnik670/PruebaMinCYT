@@ -5,11 +5,11 @@ import json
 import base64
 from langchain.tools import tool
 
-# TU ID EXACTO (El que termina en LN88)
+# TU ID EXACTO (Confirmado)
 SPREADSHEET_ID = "1Sm2icTOvSbmGD7mdUtl2DfflUZqoHpBW"
 
 def autenticar_google_sheets():
-    """Autentica usando la variable de entorno BASE64 (Indestructible)"""
+    """Autentica usando la variable de entorno BASE64 con corrección de saltos de línea"""
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
     
     try:
@@ -25,6 +25,12 @@ def autenticar_google_sheets():
         
         # 3. La convertimos a Diccionario
         creds_dict = json.loads(creds_json_str)
+        
+        # --- EL FIX DE ORO ---
+        # Esto busca los "\n" falsos y los convierte en Enters reales.
+        # Es OBLIGATORIO si el Base64 se generó en Windows.
+        if "private_key" in creds_dict:
+            creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
         
         # 4. Autenticamos
         creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
