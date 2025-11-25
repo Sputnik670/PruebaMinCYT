@@ -6,7 +6,7 @@ import base64
 from langchain.tools import tool
 
 # TU ID EXACTO (El que termina en LN88)
-SPREADSHEET_ID = "1VNQrU8tvzZnNKTXvKtNNFtkkXAeuAM4TTCPlcEeLN88"
+SPREADSHEET_ID = "https://docs.google.com/spreadsheets/d/1Sm2icTOvSbmGD7mdUtl2DfflUZqoHpBW/edit?gid=563858184#gid=563858184"
 
 def autenticar_google_sheets():
     """Autentica usando la variable de entorno BASE64 (Indestructible)"""
