@@ -15,7 +15,7 @@ export default defineConfig({
         description: 'Dashboard de Gestión Inteligente con IA',
         theme_color: '#1a1a1a',
         background_color: '#1a1a1a',
-        display: 'standalone',
+        display: 'standalone', // Esto hace que parezca una App nativa
         icons: [
           {
             src: 'pwa-192x192.png',
@@ -31,4 +31,15 @@ export default defineConfig({
       }
     })
   ],
+  // --- AGREGADO: Configuración para desarrollo Local ---
+  server: {
+    port: 5173, // Puerto estándar de Vite
+    proxy: {
+      '/api': {
+        target: 'http://127.0.0.1:8000', // Apunta a tu backend local si lo corres en tu PC
+        changeOrigin: true,
+        secure: false,
+      }
+    }
+  }
 })

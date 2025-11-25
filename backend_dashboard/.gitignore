@@ -1,24 +1,34 @@
 # --- SEGURIDAD (CRÍTICO) ---
-# Nunca subir estas llaves a GitHub
 .env
+.env.*
 service_account.json
 client_secret.json
 credentials.json
+*.pem
 
-# --- Archivos de Entornos Virtuales ---
+# --- Python / Backend ---
 venv/
 .venv/
+env/
 __pycache__/
-
-# --- Archivos de Build y Temporales ---
 *.pyc
-*.log
+.pytest_cache/
 *.sqlite3
-/dist
-/build
 
-# --- Archivos de Node/React ---
+# --- Node / React / Frontend ---
 node_modules/
 npm-debug.log
+yarn-error.log
+package-lock.json # Opcional: A veces se prefiere subirlo, pero si da conflictos puedes ignorarlo. Lo estándar es subirlo.
+dist/
+build/
+.next/
+
+# --- IDEs y Sistema Operativo ---
+.vscode/
+.idea/
 .DS_Store
-```
+Thumbs.db
+
+# --- Logs generales ---
+*.log

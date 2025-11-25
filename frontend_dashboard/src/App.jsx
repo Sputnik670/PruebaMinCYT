@@ -123,6 +123,7 @@ const ChatBotWidget = ({ apiUrl }) => {
 
   useEffect(() => msgsRef.current?.scrollIntoView({ behavior: "smooth" }), [messages, isExpanded, isOpen]);
 
+  // --- FUNCIÓN SEND CORREGIDA Y LIMPIA ---
   const send = async () => {
     if (!input && !file) return;
     
@@ -138,9 +139,7 @@ const ChatBotWidget = ({ apiUrl }) => {
     setLoading(true);
 
     try {
-      // --- CORRECCIÓN CRÍTICA ---
-      // 1. Usamos JSON en lugar de FormData
-      // 2. La clave es 'message' en lugar de 'pregunta'
+      // 1. Usamos JSON y el endpoint correcto
       const res = await fetch(`${apiUrl}/api/chat`, { 
         method: 'POST', 
         headers: {
@@ -153,7 +152,7 @@ const ChatBotWidget = ({ apiUrl }) => {
 
       const dat = await res.json();
       
-      // 3. Leemos 'dat.response' en lugar de 'dat.respuesta'
+      // 2. Leemos la respuesta correcta 'response'
       setMessages(p => [...p, { sender: 'bot', text: dat.response }]);
 
     } catch (error) {
@@ -162,23 +161,7 @@ const ChatBotWidget = ({ apiUrl }) => {
     }
     setLoading(false);
   };
-    
-    setMessages(p => [...p, { sender: 'user', text: txt, file: f?.name }]);
-    setLoading(true);
-    
-    const fd = new FormData(); 
-    fd.append('pregunta', txt || "Analiza este archivo");
-    if(f) fd.append('file', f);
-
-    try {
-      const res = await fetch(`${apiUrl}/api/chat`, { method:'POST', body:fd });
-      const dat = await res.json();
-      setMessages(p => [...p, { sender: 'bot', text: dat.respuesta }]);
-    } catch {
-      setMessages(p => [...p, { sender: 'bot', text: "Error de conexión." }]);
-    }
-    setLoading(false);
-  };
+  // --- FIN DE LA FUNCIÓN SEND ---
 
   // Estilos dinámicos
   const containerStyle = isExpanded ? 
