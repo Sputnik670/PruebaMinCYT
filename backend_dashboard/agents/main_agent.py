@@ -1,10 +1,11 @@
 from langchain_openai import ChatOpenAI
-# CORRECCIÓN AQUÍ: Volvemos a la importación estándar
-from langchain import hub 
+from langchain import hub
 from langchain.agents import AgentExecutor, create_structured_chat_agent
 
 from core.config import settings
+# IMPORTAMOS LAS DOS HERRAMIENTAS
 from tools.general import get_search_tool
+from tools.dashboard import consultar_calendario  # <--- NUEVA IMPORTACIÓN
 
 llm = ChatOpenAI(
     api_key=settings.OPENROUTER_API_KEY,
@@ -13,10 +14,13 @@ llm = ChatOpenAI(
     temperature=0,
 )
 
+# 1. Configuramos Tavily (Internet)
 search_tool = get_search_tool()
-tools = [search_tool]
 
-# CORRECCIÓN AQUÍ: Usamos hub.pull (porque importamos el objeto 'hub')
+# 2. Preparamos la lista de herramientas
+# ¡AQUÍ ESTÁ LA CLAVE! Le damos ambas al agente.
+tools = [search_tool, consultar_calendario]
+
 prompt = hub.pull("hwchase17/structured-chat-agent")
 
 agent = create_structured_chat_agent(llm, tools, prompt)
