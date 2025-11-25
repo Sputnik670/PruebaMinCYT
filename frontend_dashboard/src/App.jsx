@@ -125,8 +125,43 @@ const ChatBotWidget = ({ apiUrl }) => {
 
   const send = async () => {
     if (!input && !file) return;
-    const txt = input; setInput('');
-    const f = file; setFile(null);
+    
+    const txt = input; 
+    setInput('');
+    // Guardamos referencia al archivo pero NO lo enviamos todavía al backend
+    // hasta que lleguemos a la Fase 3 del backend.
+    const f = file; 
+    setFile(null);
+    
+    // Agregamos mensaje del usuario al chat
+    setMessages(p => [...p, { sender: 'user', text: txt, file: f?.name }]);
+    setLoading(true);
+
+    try {
+      // --- CORRECCIÓN CRÍTICA ---
+      // 1. Usamos JSON en lugar de FormData
+      // 2. La clave es 'message' en lugar de 'pregunta'
+      const res = await fetch(`${apiUrl}/api/chat`, { 
+        method: 'POST', 
+        headers: {
+          'Content-Type': 'application/json' 
+        },
+        body: JSON.stringify({ message: txt || "Hola" }) 
+      });
+
+      if (!res.ok) throw new Error("Error en la respuesta del servidor");
+
+      const dat = await res.json();
+      
+      // 3. Leemos 'dat.response' en lugar de 'dat.respuesta'
+      setMessages(p => [...p, { sender: 'bot', text: dat.response }]);
+
+    } catch (error) {
+      console.error(error);
+      setMessages(p => [...p, { sender: 'bot', text: "Error de conexión: " + error.message }]);
+    }
+    setLoading(false);
+  };
     
     setMessages(p => [...p, { sender: 'user', text: txt, file: f?.name }]);
     setLoading(true);
