@@ -58,7 +58,8 @@ def autenticar_google_sheets():
             scopes=scope
         )
         
-        return gspread.authorize(creds)
+        # Necesitamos el cliente gspread para obtener las credenciales, pero ya no lo usamos para leer
+        return gspread.authorize(creds) 
 
     except Exception as e:
         print(f"❌ Error fatal en autenticación: {str(e)}")
@@ -67,10 +68,10 @@ def autenticar_google_sheets():
 def obtener_datos_raw():
     """
     Solución robusta para XLSX: Usa la API de Drive para descargar el archivo 
-    como CSV y luego lo procesa. Esto evita el error 400 'not supported for this document'.
+    como CSV y luego lo procesa, evitando el error 400 de formato.
     """
     try:
-        # La función de autenticación devuelve el cliente gspread, que contiene las credenciales
+        # La función de autenticación devuelve el cliente gspread, del que sacamos las credenciales
         client = autenticar_google_sheets()
         if not client: return []
         
@@ -80,9 +81,8 @@ def obtener_datos_raw():
         # 1. Inicializar el servicio de Drive para manejar el archivo XLSX
         service = build('drive', 'v3', credentials=creds)
 
-        # 2. Exportar el archivo XLSX (usando SPREADSHEET_ID como File ID) a formato CSV
+        # 2. Exportar el archivo XLSX a formato CSV (esto es lo que evita el error de formato)
         file_id = SPREADSHEET_ID 
-        # Esta es la magia que permite leer un XLSX
         request = service.files().export_media(fileId=file_id, 
                                               mimeType='text/csv')
         
@@ -129,7 +129,6 @@ def consultar_calendario(consulta: str):
         datos = obtener_datos_raw()
         
         if not datos:
-            # La tabla no contiene datos (Error 400 o tabla vacía)
             return "Error: No se pudieron obtener datos del calendario (ver logs)."
         
         # Tomamos una muestra de 15 items para no saturar el chat
@@ -137,5 +136,4 @@ def consultar_calendario(consulta: str):
         return f"Datos del Calendario:\n{json.dumps(muestra, indent=2, ensure_ascii=False)}"
     
     except Exception as e:
-        # Esto captura cualquier error de procesamiento que quede
         return f"Excepción en herramienta: {str(e)}"
