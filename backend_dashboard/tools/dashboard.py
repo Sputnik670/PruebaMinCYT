@@ -68,19 +68,21 @@ def autenticar_google_sheets():
         return None
 
 def obtener_datos_raw():
-    """
-    Función auxiliar para leer la hoja completa.
-    """
+    # ... código de autenticación
     try:
         client = autenticar_google_sheets()
-        if not client:
-            return []
+        if not client: return []
         
         sheet = client.open_by_key(SPREADSHEET_ID).sheet1
-        return sheet.get_all_records()
+        
+        # --- CAMBIA ESTA LÍNEA ---
+        # Antes: return sheet.get_all_records()
+        
+        # AHORA: Con el parámetro 'head=2' para usar la Fila 2 como encabezado
+        return sheet.get_all_records(head=2) 
+        
     except Exception as e:
-        print(f"❌ Error leyendo sheet: {str(e)}")
-        return []
+    # ... código de error
 
 @tool
 def consultar_calendario(consulta: str):
