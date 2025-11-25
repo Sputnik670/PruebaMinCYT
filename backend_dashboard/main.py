@@ -13,16 +13,16 @@ app = FastAPI()
 # --- REGLA DE SEGURIDAD CORS (CRÍTICA PARA CONECTAR RENDER Y VERCEL) ---
 # **¡IMPORTANTE!** Reemplaza 'TU_DOMINIO_VERCEL.vercel.app' con la URL real de tu frontend.
 origins = [
-    "http://localhost:3000",      # React clásico
-    "http://localhost:5173",      # <--- AGREGADO: Vite (Tu entorno local)
-    "http://127.0.0.1:5173",      # <--- AGREGADO: IP local explícita
-    "https://pruebamincyt.vercel.app",  # Tu frontend en producción
-    "https://pruebamincyt.onrender.com", # Tu backend
+    "http://localhost:3000",
+    "http://localhost:5173",
+    "https://pruebamincyt.vercel.app",
+    "https://pruebamincyt.onrender.com",
 ]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
+    allow_origins=origins,  # URLs exactas
+    allow_origin_regex="https://.*\.vercel\.app",  # <--- ESTO ES LA CLAVE: Permite cualquier web de Vercel
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

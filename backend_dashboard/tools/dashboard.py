@@ -5,7 +5,7 @@ from google.oauth2 import service_account
 from langchain.tools import tool
 
 # --- CONFIGURACIÓN ---
-SPREADSHEET_ID = "1Sm2icTOvSbmGD7mdUtl2DfflUZqoHpBW"
+SPREADSHEET_ID = "1lkViCdCeq7F4yEHVdbjfrV-G7KvKP6TZfxsOc-Ov4xI"
 WORKSHEET_GID = 563858184  # ID de la pestaña específica
 
 def autenticar_google_sheets():
