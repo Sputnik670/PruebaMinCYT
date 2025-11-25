@@ -2,48 +2,39 @@ import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 import os
 import json
+import base64
 from langchain.tools import tool
 
 # TU ID EXACTO
 SPREADSHEET_ID = "1VNQrU8tvzZnNKTXvKtNNFtkkXAeuAM4TTCPlcEeLN88"
 
 def autenticar_google_sheets():
-    """Autentica y devuelve el cliente con FIX de saltos de línea"""
+    """Autentica usando la variable de entorno BASE64 (Indestructible)"""
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
     
-    posibles_rutas = ["service_account.json", "../service_account.json", "backend_dashboard/service_account.json"]
-    creds_file = None
-    
-    for ruta in posibles_rutas:
-        if os.path.exists(ruta):
-            creds_file = ruta
-            break
-            
-    if not creds_file:
-        print("⚠️ No se encontró el archivo service_account.json")
-        return None
-        
     try:
-        # --- EL FIX MÁGICO ---
-        # 1. Leemos el archivo manualmente como JSON
-        with open(creds_file, "r") as f:
-            creds_dict = json.load(f)
-
-        # 2. Buscamos la clave privada y forzamos que los saltos de línea sean reales
-        # Esto arregla el error "Invalid JWT Signature" si se rompió al copiar/pegar
-        if "private_key" in creds_dict:
-            creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
-
-        # 3. Autenticamos usando el diccionario corregido (no el archivo directo)
+        # 1. Buscamos la variable blindada
+        creds_base64 = os.getenv("GOOGLE_CREDENTIALS_BASE64")
+        
+        if not creds_base64:
+            print("⚠️ Error: No existe la variable GOOGLE_CREDENTIALS_BASE64")
+            return None
+            
+        # 2. La desciframos (De Base64 a JSON texto)
+        creds_json_str = base64.b64decode(creds_base64).decode("utf-8")
+        
+        # 3. La convertimos a Diccionario
+        creds_dict = json.loads(creds_json_str)
+        
+        # 4. Autenticamos
         creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
         return gspread.authorize(creds)
         
     except Exception as e:
-        print(f"Error crítico en autenticación: {e}")
+        print(f"Error crítico desencriptando credenciales: {e}")
         return None
 
 def obtener_datos_raw():
-    """Función para la tabla visual"""
     try:
         client = autenticar_google_sheets()
         if not client: return []
@@ -56,10 +47,9 @@ def obtener_datos_raw():
 
 @tool
 def consultar_calendario(consulta: str):
-    """Herramienta para el Agente (IA)"""
     try:
         datos = obtener_datos_raw()
-        if not datos: return "El calendario está vacío o hubo un error de lectura."
+        if not datos: return "El calendario está vacío."
         
         muestra = datos[:15]
         return f"Datos del Calendario:\n{json.dumps(muestra, indent=2, ensure_ascii=False)}"
