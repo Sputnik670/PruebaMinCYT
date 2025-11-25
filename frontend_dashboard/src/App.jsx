@@ -1,19 +1,20 @@
 import { useState, useEffect, useRef } from 'react';
 import './App.css';
 
+// --- URL DEL BACKEND (Asegúrate que coincida con tu deploy de Render) ---
+// Si estás en local, usa http://localhost:10000 o el puerto que use tu backend
+const API_URL = "https://pruebamincyt.onrender.com";
+
 function App() {
   const [data, setData] = useState([]);
   const [syncing, setSyncing] = useState(false);
-  
-  // Tu URL de Render
-  const API_URL = "https://pruebamincyt.onrender.com";
+  const [mostrarTabla, setMostrarTabla] = useState(true); // Estado para contraer tabla
 
   // Cargar datos
   const cargarDatos = () => {
     fetch(`${API_URL}/api/data`)
       .then(res => res.json())
       .then(datos => {
-        // Validación simple para asegurar que sea una lista
         if (Array.isArray(datos)) {
           setData(datos);
         }
@@ -28,178 +29,174 @@ function App() {
     setSyncing(true);
     try {
       await fetch(`${API_URL}/api/sync`, { method: 'POST' });
-      alert("Actualizado");
+      alert("Datos actualizados correctamente.");
       cargarDatos(); 
-    } catch (e) { alert("Error: " + e.message); }
+    } catch (e) { alert("Error al sincronizar: " + e.message); }
     setSyncing(false);
   };
 
-  // --- LÓGICA DINÁMICA ---
-  // Obtenemos los nombres de las columnas automáticamente del primer elemento
   const columnas = data.length > 0 ? Object.keys(data[0]) : [];
 
   return (
     <div style={{ maxWidth: '1200px', margin: '0 auto', padding: '20px', fontFamily: 'sans-serif', background: '#121212', minHeight: '100vh', color: 'white' }}>
       
-      <header style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom: 40, paddingBottom: 20, borderBottom: '1px solid #333' }}>
+      <header style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom: 20, paddingBottom: 20, borderBottom: '1px solid #333' }}>
         <div>
-          <h1 style={{margin:0}}>🌍 Calendario MinCYT</h1>
+          <h1 style={{margin:0, fontSize: '1.8rem'}}>🌍 Calendario MinCYT</h1>
           <p style={{color:'#888', margin:0}}>Gestión Inteligente</p>
         </div>
-        <button onClick={sincronizar} disabled={syncing} style={{padding:'12px 24px', background: '#2ecc71', border:'none', borderRadius:8, cursor:'pointer', fontWeight:'bold'}}>
-          {syncing ? '⏳' : '↻ Actualizar'}
-        </button>
+        <div style={{display:'flex', gap:'10px'}}>
+            <button onClick={() => setMostrarTabla(!mostrarTabla)} style={{padding:'10px 20px', background: '#444', border:'none', borderRadius:8, cursor:'pointer', color:'white'}}>
+                {mostrarTabla ? '🙈 Ocultar Tabla' : '👁️ Ver Tabla'}
+            </button>
+            <button onClick={sincronizar} disabled={syncing} style={{padding:'10px 20px', background: '#2ecc71', border:'none', borderRadius:8, cursor:'pointer', fontWeight:'bold', color:'#fff'}}>
+            {syncing ? '⏳...' : '↻ Actualizar'}
+            </button>
+        </div>
       </header>
 
-      {/* TABLA AUTOMÁTICA (Todoterreno) */}
-      <div style={{ background: '#1e1e1e', padding: 20, borderRadius: 12, overflowX: 'auto' }}>
-        
-        {data.length === 0 ? (
-          <div style={{padding:40, textAlign:'center', color:'#666'}}>
-            <p>Cargando datos o tabla vacía...</p>
-          </div>
-        ) : (
-          <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 900 }}>
-            <thead>
-              <tr style={{ borderBottom: '2px solid #444', textAlign:'left', color: '#aaa' }}>
-                {/* Dibuja los títulos automáticamente */}
-                {columnas.map((col) => (
-                  <th key={col} style={{padding:15, textTransform:'capitalize'}}>{col}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {/* Dibuja las filas automáticamente */}
-              {data.map((row, i) => (
-                <tr key={i} style={{ borderBottom: '1px solid #333' }}>
-                  {columnas.map((col) => (
-                    <td key={col} style={{padding:15}}>
-                      {/* Si es texto largo lo corta, si es null pone guion */}
-                      {row[col] ? row[col].toString() : '-'}
-                    </td>
-                  ))}
+      {/* TABLA CONTRAÍBLE */}
+      {mostrarTabla && (
+        <div style={{ background: '#1e1e1e', padding: 20, borderRadius: 12, overflowX: 'auto', marginBottom: 40, boxShadow: '0 4px 6px rgba(0,0,0,0.3)' }}>
+            {data.length === 0 ? (
+            <div style={{padding:40, textAlign:'center', color:'#666'}}>
+                <p>Cargando datos o tabla vacía...</p>
+            </div>
+            ) : (
+            <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 900, fontSize: '0.9rem' }}>
+                <thead>
+                <tr style={{ borderBottom: '2px solid #444', textAlign:'left', color: '#aaa' }}>
+                    {columnas.map((col) => (
+                    <th key={col} style={{padding:12, textTransform:'capitalize'}}>{col}</th>
+                    ))}
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
+                </thead>
+                <tbody>
+                {data.slice(0, 20).map((row, i) => ( // Limitamos a 20 filas visuales por rendimiento
+                    <tr key={i} style={{ borderBottom: '1px solid #333' }}>
+                    {columnas.map((col) => (
+                        <td key={col} style={{padding:12, color: '#ddd'}}>
+                        {row[col] ? row[col].toString().substring(0, 50) + (row[col].toString().length > 50 ? '...' : '') : '-'}
+                        </td>
+                    ))}
+                    </tr>
+                ))}
+                </tbody>
+            </table>
+            )}
+            {data.length > 20 && <p style={{textAlign:'center', color:'#666', fontSize:'0.8rem', marginTop:10}}>Mostrando primeras 20 filas de {data.length}</p>}
+        </div>
+      )}
 
       <ChatBotWidget apiUrl={API_URL} />
     </div>
   );
 }
 
-// ... (mantenemos los imports y el componente App original)
-
 const ChatBotWidget = ({ apiUrl }) => {
   const [isOpen, setIsOpen] = useState(false);
-  const [messages, setMessages] = useState([{ sender: 'bot', text: 'Hola. ¿Qué necesitas saber?' }]);
+  const [messages, setMessages] = useState([{ sender: 'bot', text: 'Hola. Soy tu asistente del MinCYT. ¿Qué necesitas saber?' }]);
   const [input, setInput] = useState('');
-  const [isListening, setIsListening] = useState(false); // <--- NUEVO ESTADO
+  const [isListening, setIsListening] = useState(false);
   const msgsRef = useRef(null);
 
   useEffect(() => msgsRef.current?.scrollIntoView({ behavior: "smooth" }), [messages, isOpen]);
 
-  const send = async (textToSend) => {
-    const txt = textToSend || input;
-    if (!txt) return;
+  const send = async (textOverride) => {
+    const textToSend = textOverride || input;
+    if (!textToSend) return;
+    
     setInput('');
-    setMessages(p => [...p, { sender: 'user', text: txt }]);
+    setMessages(p => [...p, { sender: 'user', text: textToSend }]);
     
-    // Aquí es donde harías la transición de capa (UX: Bot pensando)
-    setMessages(p => [...p, { sender: 'bot', text: '...pensando...' }]); 
-    
+    // Mensaje de carga
+    setMessages(p => [...p, { sender: 'bot', text: 'Thinking...', isLoading: true }]);
+
     try {
       const res = await fetch(`${apiUrl}/api/chat`, { 
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message: txt }) 
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message: textToSend }) 
       });
       const dat = await res.json();
       
-      // Reemplaza el mensaje '...pensando...' con la respuesta final
+      // Reemplazar mensaje de carga con respuesta real
       setMessages(p => {
-          const newMsgs = p.slice(0, -1); // Quita el último mensaje (el de pensando)
-          return [...newMsgs, { sender: 'bot', text: dat.response }];
+        const filtered = p.filter(m => !m.isLoading);
+        return [...filtered, { sender: 'bot', text: dat.response }];
       });
+
     } catch (e) { 
       setMessages(p => {
-          const newMsgs = p.slice(0, -1);
-          return [...newMsgs, { sender: 'bot', text: "Error de conexión o el agente falló." }];
+        const filtered = p.filter(m => !m.isLoading);
+        return [...filtered, { sender: 'bot', text: "Error de conexión con el servidor." }];
       });
     }
   };
 
-  // --- LÓGICA DE VOZ A TEXTO (SpeechRecognition API) ---
+  // --- RECONOCIMIENTO DE VOZ ---
   const startListening = () => {
     if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
-      alert("Tu navegador no soporta el reconocimiento de voz.");
+      alert("Tu navegador no soporta reconocimiento de voz (Prueba Chrome).");
       return;
     }
-
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     const recognition = new SpeechRecognition();
-    recognition.lang = 'es-ES'; // Idioma
-
-    recognition.onstart = () => {
-      setIsListening(true);
-      setInput("Escuchando...");
-    };
-
+    recognition.lang = 'es-ES';
+    
+    recognition.onstart = () => setIsListening(true);
+    recognition.onend = () => setIsListening(false);
+    
     recognition.onresult = (event) => {
       const transcript = event.results[0][0].transcript;
       setInput(transcript);
-      recognition.stop();
-      send(transcript); // Envía la transcripción inmediatamente
+      setTimeout(() => send(transcript), 500); // Auto-enviar después de hablar
     };
-
-    recognition.onend = () => {
-      setIsListening(false);
-      if (input === "Escuchando...") setInput(''); // Si el usuario no dijo nada
-    };
-
-    recognition.onerror = (event) => {
-      console.error(event.error);
-      setIsListening(false);
-      setInput('');
-      alert("Error en reconocimiento de voz: " + event.error);
-    };
-
+    
     recognition.start();
   };
-  // --- FIN LÓGICA V2T ---
-
 
   return (
     <div style={{ position: 'fixed', bottom: 20, right: 20, zIndex: 9999 }}>
-      {!isOpen && <button onClick={()=>setIsOpen(true)} style={{width:60, height:60, borderRadius:'50%', fontSize:30, cursor:'pointer', background:'#646cff', border:'none'}}>💬</button>}
+      {!isOpen && <button onClick={()=>setIsOpen(true)} style={{width:60, height:60, borderRadius:'50%', fontSize:30, cursor:'pointer', background:'#646cff', border:'none', boxShadow:'0 4px 10px rgba(0,0,0,0.5)'}}>💬</button>}
       {isOpen && (
-        <div style={{ width: 350, height: 500, background: '#222', borderRadius: 12, display:'flex', flexDirection:'column', border:'1px solid #444' }}>
-            <div style={{padding:15, background:'#646cff', display:'flex', justifyContent:'space-between'}}>
-                <strong>Asistente IA</strong>
-                <button onClick={()=>setIsOpen(false)} style={{background:'none', border:'none', color:'white', cursor:'pointer'}}>✕</button>
+        <div style={{ width: 350, height: 500, background: '#222', borderRadius: 12, display:'flex', flexDirection:'column', border:'1px solid #444', boxShadow:'0 10px 25px rgba(0,0,0,0.5)' }}>
+            <div style={{padding:15, background:'#646cff', borderRadius: '12px 12px 0 0', display:'flex', justifyContent:'space-between', alignItems:'center'}}>
+                <strong style={{color:'white'}}>Asistente IA</strong>
+                <button onClick={()=>setIsOpen(false)} style={{background:'none', border:'none', color:'white', cursor:'pointer', fontSize:'1.2rem'}}>✕</button>
             </div>
-            <div style={{flex:1, overflowY:'auto', padding:10, display:'flex', flexDirection:'column', gap:10}}>
-                {messages.map((m,i) => <div key={i} style={{alignSelf: m.sender==='user'?'flex-end':'flex-start', background: m.sender==='user'?'#4f46e5':'#333', padding:10, borderRadius:8}}>{m.text}</div>)}
+            <div style={{flex:1, overflowY:'auto', padding:15, display:'flex', flexDirection:'column', gap:10}}>
+                {messages.map((m,i) => (
+                    <div key={i} style={{
+                        alignSelf: m.sender==='user'?'flex-end':'flex-start', 
+                        background: m.sender==='user'?'#4f46e5':'#333', 
+                        padding:'10px 14px', 
+                        borderRadius:8, 
+                        maxWidth:'80%',
+                        lineHeight: '1.4',
+                        fontSize: '0.95rem',
+                        color: m.isLoading ? '#aaa' : 'white',
+                        fontStyle: m.isLoading ? 'italic' : 'normal'
+                    }}>
+                        {m.text}
+                    </div>
+                ))}
                 <div ref={msgsRef}></div>
             </div>
-            <div style={{padding:10, display:'flex'}}>
+            <div style={{padding:10, display:'flex', gap:5, borderTop:'1px solid #333'}}>
+                <button 
+                    onClick={startListening} 
+                    style={{padding:'10px', borderRadius:'50%', border:'none', background: isListening ? '#ef4444' : '#333', cursor:'pointer', transition:'all 0.2s'}}
+                    title="Hablar"
+                >
+                    {isListening ? '🛑' : '🎙️'}
+                </button>
                 <input 
                     value={input} 
                     onChange={e=>setInput(e.target.value)} 
                     onKeyDown={e=>e.key==='Enter'&&send()} 
-                    style={{flex:1, padding:10, borderRadius:4, border:'none'}} 
-                    placeholder={isListening ? 'Habla ahora...' : "Escribe o usa el micrófono..."}
-                    disabled={isListening} 
+                    style={{flex:1, padding:10, borderRadius:20, border:'1px solid #444', background:'#1a1a1a', color:'white', outline:'none'}} 
+                    placeholder="Escribe aquí..." 
                 />
-                
-                {/* BOTÓN DE VOZ O ENVIAR */}
-                {input.length > 0 && input !== 'Escuchando...' ? (
-                    <button onClick={() => send()} style={{marginLeft:5, padding:'0 15px'}}>➤</button>
-                ) : (
-                    <button onClick={startListening} disabled={isListening} style={{marginLeft:5, padding:'0 15px', background: isListening ? '#f44336' : '#646cff'}}>
-                       {isListening ? '🔴' : '🎤'}
-                    </button>
-                )}
+                <button onClick={() => send()} style={{padding:'0 15px', background:'none', border:'none', cursor:'pointer', fontSize:'1.2rem'}}>➤</button>
             </div>
         </div>
       )}
