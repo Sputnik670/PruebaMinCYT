@@ -6,7 +6,7 @@ import base64
 from langchain.tools import tool
 
 # TU ID EXACTO
-SPREADSHEET_ID = "1VNQrU8tvzZnNKTXvKtNNFtkkXAeuAM4TTCPlcEeLN88"
+SPREADSHEET_ID = "1Sm2icTOvSbmGD7mdUtl2DfflUZqoHpBW"
 
 def autenticar_google_sheets():
     """Autentica usando la variable de entorno BASE64 (Indestructible)"""
@@ -47,10 +47,6 @@ def obtener_datos_raw():
 
 @tool
 def consultar_calendario(consulta: str):
-    """
-    Usa esta herramienta para consultar la agenda, eventos, fechas 
-    y lugares del calendario internacional del Ministerio.
-    """
     try:
         datos = obtener_datos_raw()
         if not datos: return "El calendario está vacío."
