@@ -4,12 +4,11 @@ import gspread
 from google.oauth2 import service_account
 from langchain.tools import tool
 
-# ID del Sheet Nativo (el que creamos y funcionaba)
+# ID del Google Sheet Nativo que ya configuramos
 SPREADSHEET_ID = "1lkViCdCeq7F4yEHVdbjfrV-G7KvKP6TZfxsOc-Ov4xI"
 WORKSHEET_GID = 563858184
 
 def autenticar_google_sheets():
-    scope = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
     try:
         private_key = os.getenv("GOOGLE_PRIVATE_KEY")
         client_email = os.getenv("GOOGLE_CLIENT_EMAIL")
@@ -27,20 +26,21 @@ def autenticar_google_sheets():
             "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
             "client_x509_cert_url": f"https://www.googleapis.com/robot/v1/metadata/x509/{client_email}"
         }
-        creds = service_account.Credentials.from_service_account_info(creds_dict, scopes=scope)
+        creds = service_account.Credentials.from_service_account_info(creds_dict, scopes=[
+            "https://www.googleapis.com/auth/spreadsheets",
+            "https://www.googleapis.com/auth/drive"
+        ])
         return gspread.authorize(creds)
-    except Exception as e:
-        print(f"Error Auth Google: {e}")
+    except Exception:
         return None
 
 def obtener_datos_raw():
-    print(f"--- LEYENDO GOOGLE SHEET ---")
     try:
         client = autenticar_google_sheets()
         if not client: return []
         
+        # Abrir por ID
         sh = client.open_by_key(SPREADSHEET_ID)
-        # Intento robusto de obtener hoja
         try:
             worksheet = sh.get_worksheet_by_id(WORKSHEET_GID)
             if not worksheet: worksheet = sh.sheet1
@@ -50,11 +50,10 @@ def obtener_datos_raw():
         data = worksheet.get_all_values()
         if len(data) < 2: return []
 
-        # Buscador de encabezados simple
+        # Buscar encabezados (fila 1 o donde estén)
         header_idx = 0
         for i, row in enumerate(data[:5]):
-            row_s = [str(c).lower() for c in row]
-            if "título" in row_s or "titulo" in row_s:
+            if any("título" in str(c).lower() for c in row):
                 header_idx = i
                 break
         
@@ -64,8 +63,7 @@ def obtener_datos_raw():
         res = []
         for r in rows:
             if not any(r): continue
-            # Normalizar longitud
-            if len(r) < len(headers): r += [""]*(len(headers)-len(r))
+            if len(r) < len(headers): r += [""] * (len(headers) - len(r))
             res.append(dict(zip(headers, r)))
             
         return res
@@ -75,7 +73,6 @@ def obtener_datos_raw():
 
 @tool
 def consultar_calendario(consulta: str):
-    """Consulta la agenda/calendario del ministerio."""
-    data = obtener_datos_raw()
-    # Limitamos a 10 para no saturar la memoria del modelo gratis
-    return json.dumps(data[:10], ensure_ascii=False)
+    """Consulta la agenda del ministerio."""
+    d = obtener_datos_raw()
+    return json.dumps(d[:10], ensure_ascii=False)
