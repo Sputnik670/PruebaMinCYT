@@ -6,97 +6,100 @@ from langchain.tools import tool
 
 # --- CONFIGURACIÓN ---
 SPREADSHEET_ID = "1Sm2icTOvSbmGD7mdUtl2DfflUZqoHpBW"
-WORKSHEET_GID = 563858184  # Hoja Calendario Internacional
+WORKSHEET_GID = 563858184  # ID de la pestaña específica
 
 def autenticar_google_sheets():
-    """
-    Autenticación con Google Sheets usando Service Account desde variables de entorno.
-    """
-    scope = [
-        "https://www.googleapis.com/auth/spreadsheets",
-        "https://www.googleapis.com/auth/drive"
-    ]
-
+    """Autenticación con Google Sheets usando variables de entorno."""
+    scope = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
     try:
         private_key = os.getenv("GOOGLE_PRIVATE_KEY")
         client_email = os.getenv("GOOGLE_CLIENT_EMAIL")
-
+        
         if not private_key or not client_email:
-            print("⚠️ ERROR: Credenciales de Google no encontradas en las variables de entorno.")
+            print("⚠️ ERROR: Faltan credenciales en .env")
             return None
 
         creds_dict = {
             "type": "service_account",
             "project_id": "dashboard-impacto-478615",
-            "private_key_id": "indefinido_por_seguridad",
+            "private_key_id": "indefinido",
             "private_key": private_key.replace("\\n", "\n"),
             "client_email": client_email,
             "client_id": "116197238257458301101",
             "auth_uri": "https://accounts.google.com/o/oauth2/auth",
             "token_uri": "https://oauth2.googleapis.com/token",
             "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
-            "client_x509_cert_url": f"https://www.googleapis.com/robot/v1/metadata/x509/{client_email.replace('@', '%40')}"
+            "client_x509_cert_url": f"https://www.googleapis.com/robot/v1/metadata/x509/{client_email}"
         }
-
-        creds = service_account.Credentials.from_service_account_info(
-            creds_dict, scopes=scope
-        )
-
+        creds = service_account.Credentials.from_service_account_info(creds_dict, scopes=scope)
         return gspread.authorize(creds)
-
     except Exception as e:
-        print(f"❌ Error en autenticación: {str(e)}")
+        print(f"❌ Error autenticación: {e}")
         return None
 
-
 def obtener_datos_raw():
-    """
-    Lee datos desde la hoja específica del Spreadsheet definida por GID.
-    """
+    """Recupera datos de la hoja y maneja errores de filas vacías."""
+    print("--- INTENTANDO LEER GOOGLE SHEET ---")
+    client = autenticar_google_sheets()
+    if not client:
+        return []
+
     try:
-        client = autenticar_google_sheets()
-        if not client:
-            return []
+        # Abrir documento
+        sh = client.open_by_key(SPREADSHEET_ID)
+        
+        # Intentar abrir la hoja por ID, si falla, abre la primera
+        try:
+            worksheet = sh.get_worksheet_by_id(WORKSHEET_GID)
+            if not worksheet: raise Exception("Hoja no encontrada")
+            print(f"✔ Pestaña '{worksheet.title}' cargada correctamente.")
+        except:
+            print(f"⚠️ No se encontró la hoja con ID {WORKSHEET_GID}, abriendo la primera hoja...")
+            worksheet = sh.sheet1
 
-        spreadsheet = client.open_by_key(SPREADSHEET_ID)
-        sheet = spreadsheet.get_worksheet_by_id(WORKSHEET_GID)
-
-        data = sheet.get_all_values()
+        data = worksheet.get_all_values()
+        
         if len(data) < 2:
-            print("⚠️ Hoja sin datos suficientes.")
+            print("⚠️ La hoja está vacía o tiene muy pocos datos.")
             return []
 
-        headers = data[1]  # Segunda fila
-        filas = data[2:]    # Desde la tercera fila
-
+        # --- LÓGICA INTELIGENTE DE ENCABEZADOS ---
+        # Buscamos la fila que contiene "Título" o "Title" para usarla de encabezado
+        header_index = 0
+        for i, row in enumerate(data[:5]): # Mira las primeras 5 filas
+            row_str = [str(c).lower() for c in row]
+            if "título" in row_str or "titulo" in row_str or "evento" in row_str:
+                header_index = i
+                break
+        
+        print(f"ℹ️ Encabezados detectados en la fila {header_index + 1}")
+        
+        headers = data[header_index]
+        filas = data[header_index + 1:]
+        
         resultados = []
-
         for row in filas:
-            if any(row):
-                row = row[:len(headers)]
-                resultados.append(dict(zip(headers, row)))
+            # Filtramos filas totalmente vacías
+            if not any(field.strip() for field in row):
+                continue
+            
+            # Rellenar si la fila es más corta que los headers
+            if len(row) < len(headers):
+                row += [""] * (len(headers) - len(row))
+            
+            # Crear diccionario seguro
+            item = {str(headers[i]): str(row[i]) for i in range(len(headers)) if i < len(row)}
+            resultados.append(item)
 
-        print(f"✔ Datos cargados: {len(resultados)} filas")
+        print(f"✔ Datos procesados: {len(resultados)} filas enviadas al frontend.")
         return resultados
 
     except Exception as e:
-        print(f"❌ Error al leer los datos: {str(e)}")
+        print(f"❌ ERROR LEYENDO SHEET: {str(e)}")
         return []
-
 
 @tool
 def consultar_calendario(consulta: str):
-    """
-    Herramienta para consultar agenda y eventos del calendario.
-    """
-    try:
-        print("🔍 Ejecutando herramienta consultar_calendario()...")
-        datos = obtener_datos_raw()
-
-        if not datos:
-            return "No se pudieron obtener datos del calendario."
-
-        return json.dumps(datos[:15], indent=2, ensure_ascii=False)
-
-    except Exception as e:
-        return f"Excepción en herramienta: {str(e)}"
+    """Consulta eventos del calendario."""
+    datos = obtener_datos_raw()
+    return json.dumps(datos[:10], ensure_ascii=False)
