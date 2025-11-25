@@ -4,9 +4,10 @@ import gspread
 from google.oauth2 import service_account
 from langchain.tools import tool
 
-# --- CONFIGURACIÓN ---
+# --- CONFIGURACIÓN ACTUALIZADA ---
+# Nuevo ID extraído de tu enlace
 SPREADSHEET_ID = "1lkViCdCeq7F4yEHVdbjfrV-G7KvKP6TZfxsOc-Ov4xI"
-WORKSHEET_GID = 563858184  # ID de la pestaña específica
+WORKSHEET_GID = 563858184  # Mantenemos el GID que venía en la URL
 
 def autenticar_google_sheets():
     """Autenticación con Google Sheets usando variables de entorno."""
@@ -39,7 +40,7 @@ def autenticar_google_sheets():
 
 def obtener_datos_raw():
     """Recupera datos de la hoja y maneja errores de filas vacías."""
-    print("--- INTENTANDO LEER GOOGLE SHEET ---")
+    print(f"--- INTENTANDO LEER GOOGLE SHEET (ID: {SPREADSHEET_ID}) ---")
     client = autenticar_google_sheets()
     if not client:
         return []
@@ -54,7 +55,7 @@ def obtener_datos_raw():
             if not worksheet: raise Exception("Hoja no encontrada")
             print(f"✔ Pestaña '{worksheet.title}' cargada correctamente.")
         except:
-            print(f"⚠️ No se encontró la hoja con ID {WORKSHEET_GID}, abriendo la primera hoja...")
+            print(f"⚠️ No se encontró la hoja con GID {WORKSHEET_GID}, abriendo la primera hoja...")
             worksheet = sh.sheet1
 
         data = worksheet.get_all_values()
@@ -68,6 +69,7 @@ def obtener_datos_raw():
         header_index = 0
         for i, row in enumerate(data[:5]): # Mira las primeras 5 filas
             row_str = [str(c).lower() for c in row]
+            # Palabras clave para encontrar dónde empieza la tabla real
             if "título" in row_str or "titulo" in row_str or "evento" in row_str:
                 header_index = i
                 break
