@@ -12,14 +12,12 @@ def autenticar_google_sheets():
     Autentica con Google Sheets usando variables de entorno de Render.
     Incluye corrección de formato de clave privada y logs de debug.
     """
-    # 1. Definimos el alcance de permisos
     scope = [
         "https://www.googleapis.com/auth/spreadsheets",
         "https://www.googleapis.com/auth/drive"
     ]
 
     try:
-        # 2. Leemos las variables
         private_key = os.getenv("GOOGLE_PRIVATE_KEY")
         client_email = os.getenv("GOOGLE_CLIENT_EMAIL")
 
@@ -28,20 +26,17 @@ def autenticar_google_sheets():
             print(f"--- DEBUG AUTH ---")
             print(f"Email: {client_email}")
             print(f"Longitud Clave: {len(private_key)}")
-            # Mostramos el inicio y fin para ver si hay comillas extra
             print(f"Inicio Clave: >{private_key[:10]}<") 
             print(f"Fin Clave: >{private_key[-10:]}<")
             print(f"--- FIN DEBUG ---")
         else:
             print("⚠️ ERROR CRÍTICO: No se leyó la variable GOOGLE_PRIVATE_KEY")
             return None
-        # ---------------------------------------------------------------
 
         if not private_key or not client_email:
             return None
 
-        # 3. Construimos el diccionario de credenciales
-        # NOTA: El .replace('\\n', '\n') es vital para que funcione en Render
+        # El .replace('\\n', '\n') es vital
         creds_dict = {
             "type": "service_account",
             "project_id": "dashboard-impacto-478615",
@@ -55,7 +50,6 @@ def autenticar_google_sheets():
             "client_x509_cert_url": f"https://www.googleapis.com/robot/v1/metadata/x509/{client_email.replace('@', '%40')}"
         }
 
-        # 4. Autenticamos
         creds = service_account.Credentials.from_service_account_info(
             creds_dict, 
             scopes=scope
@@ -69,7 +63,7 @@ def autenticar_google_sheets():
 
 def obtener_datos_raw():
     """
-    Obtiene todos los registros de la Hoja 1, usando la Fila 2 como encabezado.
+    Obtiene todos los registros de la Hoja 1, usando la Fila 2 como encabezado (head=2).
     """
     try:
         client = autenticar_google_sheets()
@@ -77,7 +71,7 @@ def obtener_datos_raw():
         
         sheet = client.open_by_key(SPREADSHEET_ID).sheet1
         
-        # Leemos los datos usando la Fila 2 (head=2) como títulos
+        # CORRECCIÓN FINAL: Usar la Fila 2 (head=2) como encabezado
         return sheet.get_all_records(head=2) 
         
     except Exception as e:
