@@ -71,25 +71,23 @@ def obtener_datos_raw():
     como CSV y luego lo procesa, evitando el error 400 de formato.
     """
     try:
-        # La función de autenticación devuelve el cliente gspread, del que sacamos las credenciales
+        # La función de autenticación devuelve el cliente gspread
         client = autenticar_google_sheets()
         if not client: return []
         
-        # Obtenemos las credenciales del objeto cliente para el servicio de Drive
-        creds = client.credentials 
+        # OBTENER CREDENCIALES: CORRECCIÓN DEL ERROR DE ATRIBUTO
+        creds = client.auth  # <--- ¡CORRECCIÓN CLAVE AQUÍ!
 
         # 1. Inicializar el servicio de Drive para manejar el archivo XLSX
         service = build('drive', 'v3', credentials=creds)
 
-        # 2. Exportar el archivo XLSX a formato CSV (esto es lo que evita el error de formato)
+        # 2. Exportar el archivo XLSX (usando SPREADSHEET_ID como File ID) a formato CSV
         file_id = SPREADSHEET_ID 
         request = service.files().export_media(fileId=file_id, 
                                               mimeType='text/csv')
         
-        # 3. Descargar el contenido
+        # 3. Descargar el contenido y procesar el CSV
         downloaded_file = request.execute()
-
-        # 4. Procesar el CSV en Python (la salida del CSV es UTF-8)
         file_io = io.StringIO(downloaded_file.decode('utf-8'))
         reader = csv.reader(file_io)
         
@@ -98,17 +96,14 @@ def obtener_datos_raw():
         if not data or len(data) < 2:
             return []
         
-        # 5. Mapear datos (Encabezados en Fila 2 - índice 1)
-        headers = [h for h in data[1] if h] # Solo tomamos encabezados no vacíos
+        # 4. Mapear datos (Encabezados en Fila 2 - índice 1)
+        headers = [h for h in data[1] if h] 
         data_rows = data[2:]
         results = []
         
         for row in data_rows:
-            # Solo procesa si la fila tiene algún dato
             if any(row):
-                # Mapeamos la fila de datos con los encabezados
                 processed_row = row[:len(headers)]
-                # Solo agregamos si la lista de datos coincide con los encabezados
                 if len(processed_row) == len(headers):
                     results.append(dict(zip(headers, processed_row)))
         
