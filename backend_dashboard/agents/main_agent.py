@@ -1,11 +1,12 @@
 from langchain_openai import ChatOpenAI
-from langchain import hub
-from langchain.agents import AgentExecutor, create_structured_chat_agent
+from langchain.agents import AgentExecutor
+from langchain.tools import Tool
+from langchain.hub import hub
 
 from core.config import settings
-# IMPORTAMOS LAS DOS HERRAMIENTAS
 from tools.general import get_search_tool
-from tools.dashboard import consultar_calendario  # <--- NUEVA IMPORTACIÓN
+from tools.dashboard import consultar_calendario
+
 
 llm = ChatOpenAI(
     api_key=settings.OPENROUTER_API_KEY,
@@ -14,27 +15,25 @@ llm = ChatOpenAI(
     temperature=0,
 )
 
-# 1. Configuramos Tavily (Internet)
-search_tool = get_search_tool()
+# Cargamos prompt recomendado
+prompt = hub.pull("hwchase17/openai-functions-agent")
 
-# 2. Preparamos la lista de herramientas
-# ¡AQUÍ ESTÁ LA CLAVE! Le damos ambas al agente.
+# Herramientas
+search_tool = get_search_tool()
 tools = [search_tool, consultar_calendario]
 
-prompt = hub.pull("hwchase17/structured-chat-agent")
-
-agent = create_structured_chat_agent(llm, tools, prompt)
-
-agent_executor = AgentExecutor(
-    agent=agent, 
-    tools=tools, 
-    verbose=True, 
-    handle_parsing_errors=True
+# Creamos AgentExecutor con el llm y herramientas
+agent = AgentExecutor.from_agent_and_tools(
+    agent=prompt,  # Usa el prompt como base del agente
+    tools=tools,
+    llm=llm,
+    verbose=True
 )
+
 
 def get_agent_response(user_message: str):
     try:
-        response = agent_executor.invoke({"input": user_message})
+        response = agent.invoke({"input": user_message})
         return response["output"]
     except Exception as e:
         return f"Ocurrió un error en el agente: {str(e)}"
