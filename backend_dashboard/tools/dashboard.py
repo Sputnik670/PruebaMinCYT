@@ -63,19 +63,42 @@ def autenticar_google_sheets():
 
 def obtener_datos_raw():
     """
-    Obtiene todos los registros de la Hoja 1, usando la Fila 2 como encabezado (head=2).
+    Lee los datos crudos (sin encabezados automáticos) y los procesa, 
+    usando la Fila 2 como encabezado de manera explícita para evitar errores de formato.
     """
     try:
+        # Se asume que 'autenticar_google_sheets()' está definido en este archivo.
         client = autenticar_google_sheets()
         if not client: return []
         
         sheet = client.open_by_key(SPREADSHEET_ID).sheet1
         
-        # CORRECCIÓN FINAL: Usar la Fila 2 (head=2) como encabezado
-        return sheet.get_all_records(head=2) 
+        # 1. Obtenemos TODOS los valores como lista de listas
+        # Este método no se rompe por celdas combinadas.
+        all_data = sheet.get_all_values()
         
+        # Si la hoja está vacía o tiene menos de dos filas
+        if not all_data or len(all_data) < 2:
+            return []
+            
+        # 2. Definimos que los encabezados son la Fila 2 (índice 1)
+        headers = [h for h in all_data[1] if h] # Solo tomamos encabezados no vacíos
+        data_rows = all_data[2:] # Los datos empiezan desde la Fila 3 (índice 2)
+        
+        # 3. Mapeamos los datos y evitamos las filas vacías entre meses
+        results = []
+        for row in data_rows:
+            # Solo procesa si la fila tiene algún dato
+            if any(row): 
+                # Mapeamos la fila de datos con los encabezados
+                processed_row = row[:len(headers)]
+                results.append(dict(zip(headers, processed_row)))
+        
+        return results
+
     except Exception as e:
-        print(f"❌ Error leyendo datos del sheet: {str(e)}")
+        # Esto imprimirá el error real si no es de autenticación
+        print(f"❌ Error leyendo datos del sheet (Método Robusto): {str(e)}")
         return []
 
 @tool
