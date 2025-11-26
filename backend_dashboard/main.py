@@ -17,12 +17,16 @@ origins = [
     "http://localhost:5173",
     "https://pruebamincyt.vercel.app",
     "https://pruebamincyt.onrender.com",
+    # --- AGREGA ESTAS LÍNEAS ---
+    "https://www.pruebamincyt.ar",
+    "https://pruebamincyt.ar", 
 ]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,  # URLs exactas
-    allow_origin_regex="https://.*\.vercel\.app",  # <--- ESTO ES LA CLAVE: Permite cualquier web de Vercel
+    allow_origins=origins, 
+    # El regex está bien para Vercel, pero NO cubre tu dominio .ar
+    allow_origin_regex="https://.*\.vercel\.app", 
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
