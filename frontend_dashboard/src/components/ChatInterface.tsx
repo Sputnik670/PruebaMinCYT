@@ -181,6 +181,7 @@ export const ChatInterface: React.FC = () => {
             ref={fileInputRef} 
             onChange={handleFileChange} 
             className="hidden" 
+            aria-label="Subir documento PDF" // <--- SOLUCIÓN AÑADIDA
           />
           <button
             onClick={handleFileClick}
