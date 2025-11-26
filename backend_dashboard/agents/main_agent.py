@@ -11,12 +11,16 @@ from tools.email import crear_borrador_email
 
 # 1. Configuración del Modelo (Gemini 1.5 Flash)
 # Usamos el nombre canónico completo para evitar ambigüedades
+# ... imports ...
+
+# 1. Configuración del Modelo (Gemini 1.5 Flash)
 llm = ChatGoogleGenerativeAI(
-    model="models/gemini-1.5-flash", 
+    model="models/gemini-1.5-flash",
     temperature=0,
     max_retries=2,
-    transport="rest", # Forzamos conexión REST estándar que es más estable en servidores
+    # ELIMINAMOS transport="rest" para dejar que la librería use su defecto optimizado
 )
+
 
 # 2. Prompt ReAct (Optimizado para Gemini)
 template = '''Responde las preguntas del usuario usando las siguientes herramientas.
