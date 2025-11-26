@@ -18,8 +18,8 @@ origins = [
     "https://pruebamincyt.vercel.app",
     "https://pruebamincyt.onrender.com",
     # --- AGREGA ESTAS LÍNEAS ---
-    "https://www.pruebamincyt.ar",
-    "https://pruebamincyt.ar", 
+    "https://www.pruebasmincyt.ar",
+    "https://pruebasmincyt.ar", 
 ]
 
 app.add_middleware(
