@@ -12,9 +12,12 @@ from tools.email import crear_borrador_email
 # 1. Configuración del Modelo (Gemini 1.5 Flash)
 # Requiere que la clave GOOGLE_API_KEY esté vinculada a una cuenta con facturación activa.
 llm = ChatGoogleGenerativeAI(
-    model="gemini-1.5-flash",  # <--- Ahora sí funcionará porque actualizamos la librería
+    model="gemini-1.5-flash", 
     temperature=0,
     max_retries=2,
+    # AGREGADO: Forzamos la conversión de errores para evitar caídas silenciosas
+    # y aseguramos el transporte correcto si es necesario.
+    transport="rest", 
 )
 
 # 2. Prompt ReAct (Optimizado para Gemini)
