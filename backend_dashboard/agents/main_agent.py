@@ -8,12 +8,12 @@ from tools.general import get_search_tool
 from tools.dashboard import consultar_calendario
 from tools.email import crear_borrador_email
 
-# 1. Configuración del Modelo (Google Gemini Oficial)
-# Asegúrate de tener GOOGLE_API_KEY en las variables de entorno de Render
+# 1. Configuración del Modelo (Gemini 1.5 Flash)
+# Requiere que la clave GOOGLE_API_KEY esté vinculada a una cuenta con facturación activa.
 llm = ChatGoogleGenerativeAI(
-    model="gemini-pro",
+    model="gemini-1.5-flash",
     temperature=0,
-    max_retries=2,
+    max_retries=3, # Aumentamos retries para mayor tolerancia a fallos de red
 )
 
 # 2. Prompt ReAct (Optimizado para Gemini)
