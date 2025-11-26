@@ -1,7 +1,7 @@
 import os
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 # Importamos el agente y la función de datos crudos
 from agents.main_agent import get_agent_response
@@ -26,7 +26,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=origins, 
     # El regex está bien para Vercel, pero NO cubre tu dominio .ar
-    allow_origin_regex="https://.*\.vercel\.app", 
+    allow_origin_regex=r"https://.*\.vercel\.app", 
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -34,7 +34,7 @@ app.add_middleware(
 # --- FIN CORS ---
 
 class ChatRequest(BaseModel):
-    message: str
+    message: str = Field(..., min_length=1, max_length=4000)
 
 @app.get("/")
 def read_root():
@@ -43,8 +43,12 @@ def read_root():
 # --- ENDPOINT 1: EL CHATBOT (IA) ---
 @app.post("/api/chat")
 async def chat_endpoint(request: ChatRequest):
-    respuesta = get_agent_response(request.message)
-    return {"response": respuesta}
+    try:
+        respuesta = get_agent_response(request.message)
+        return {"response": respuesta}
+    except Exception as e:
+        print(f"❌ Error en chat endpoint: {str(e)}")
+        raise HTTPException(status_code=500, detail="Error procesando la solicitud")
 
 # --- ENDPOINT 2: LA TABLA VISUAL (Datos) ---
 @app.get("/api/data")

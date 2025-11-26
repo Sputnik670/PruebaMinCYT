@@ -1,6 +1,6 @@
 // src/App.jsx (VERSIÓN INTEGRADA)
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect } from 'react';
 import './App.css';
 // --- NUEVO IMPORT PARA EL CHATBOT ---
 import { ChatInterface } from './components/ChatInterface'; 
