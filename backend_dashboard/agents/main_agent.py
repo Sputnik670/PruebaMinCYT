@@ -15,7 +15,7 @@ from tools.email import crear_borrador_email
 
 # 1. Configuración del Modelo (Gemini 1.5 Flash)
 llm = ChatGoogleGenerativeAI(
-    model="models/gemini-1.5-flash",
+    model="gemini-1.5-flash",
     temperature=0,
     max_retries=2,
     # ELIMINAMOS transport="rest" para dejar que la librería use su defecto optimizado
