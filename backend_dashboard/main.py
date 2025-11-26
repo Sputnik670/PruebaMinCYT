@@ -52,11 +52,3 @@ def get_dashboard_data():
     """Devuelve el JSON completo para pintar la tabla en el Frontend"""
     datos = obtener_datos_raw()
     return datos
-
-# --- ENDPOINT 3: SINCRONIZAR (Botón verde) ---
-@app.post("/api/sync")
-def sync_dashboard():
-    """
-    Sincronizar es simplemente confirmar que el servicio está activo.
-    """
-    return {"status": "ok", "msg": "Datos actualizados desde Google Sheets"}

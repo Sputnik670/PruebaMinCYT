@@ -2,9 +2,10 @@
 
 // Asegúrate de que esta URL sea la de tu backend en Render (sin barra al final)
 // Si estás en local probando backend y frontend a la vez, usa "http://127.0.0.1:8000"
-const API_URL = "https://pruebamincyt.onrender.com"; 
+const API_URL = import.meta.env.VITE_BACKEND_URL || "http://localhost:8000";
 
 export const sendMessageToGemini = async (message: string) => {
+   // ... el resto sigue igual, usando API_URL
   try {
     const response = await fetch(`${API_URL}/api/chat`, {
       method: 'POST',

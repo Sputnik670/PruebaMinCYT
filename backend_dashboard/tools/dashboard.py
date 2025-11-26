@@ -4,7 +4,7 @@ import gspread
 from google.oauth2 import service_account
 from langchain.tools import tool
 
-# ID del Google Sheet Nativo que ya configuramos
+# ID del Google Sheet Nativo
 SPREADSHEET_ID = "1lkViCdCeq7F4yEHVdbjfrV-G7KvKP6TZfxsOc-Ov4xI"
 WORKSHEET_GID = 563858184
 
@@ -50,7 +50,7 @@ def obtener_datos_raw():
         data = worksheet.get_all_values()
         if len(data) < 2: return []
 
-        # Buscar encabezados (fila 1 o donde estén)
+        # Buscar encabezados
         header_idx = 0
         for i, row in enumerate(data[:5]):
             if any("título" in str(c).lower() for c in row):
@@ -73,6 +73,7 @@ def obtener_datos_raw():
 
 @tool
 def consultar_calendario(consulta: str):
-    """Consulta la agenda del ministerio."""
+    """Consulta la agenda del ministerio completa."""
     d = obtener_datos_raw()
-    return json.dumps(d[:10], ensure_ascii=False)
+    # DEUDA TÉCNICA RESUELTA: Quitamos el límite [:10]
+    return json.dumps(d, ensure_ascii=False)

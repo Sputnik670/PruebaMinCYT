@@ -8,7 +8,7 @@ import { ChatInterface } from './components/ChatInterface';
 
 // --- URL DEL BACKEND (Asegúrate que coincida con tu deploy de Render) ---
 // Si estás en local, usa http://localhost:10000 o el puerto que use tu backend
-const API_URL = "https://pruebamincyt.onrender.com";
+const API_URL = import.meta.env.VITE_BACKEND_URL || "http://localhost:8000";
 
 function App() {
   const [data, setData] = useState([]);
@@ -29,15 +29,16 @@ function App() {
 
   useEffect(() => { cargarDatos(); }, []);
 
-  // Sincronizar
+// Sincronizar (Opción B: Recarga eficiente sin llamada fake al backend)
   const sincronizar = async () => {
     setSyncing(true);
-    try {
-      await fetch(`${API_URL}/api/sync`, { method: 'POST' });
+    // Simulamos una pequeña espera visual para que el usuario vea que "algo pasa"
+    // y llamamos a cargarDatos para traer la info fresca de Google Sheets.
+    await cargarDatos();
+    setTimeout(() => {
+      setSyncing(false);
       alert("Datos actualizados correctamente.");
-      cargarDatos(); 
-    } catch (e) { alert("Error al sincronizar: " + e.message); }
-    setSyncing(false);
+    }, 800); 
   };
 
   const columnas = data.length > 0 ? Object.keys(data[0]) : [];
