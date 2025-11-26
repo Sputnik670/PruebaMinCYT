@@ -1,38 +1,38 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Message } from '../types/types'; // Ajusta si tu archivo se llama diferente
-import { sendMessageToGemini } from '../services/geminiService';
+import { Message } from '../types/types';
+import { sendMessageToGemini, uploadFile } from '../services/geminiService'; // <--- Importamos uploadFile
 import { MessageBubble } from './MessageBubble';
-import { Send, Loader2, Bot } from 'lucide-react';
+import { Send, Loader2, Bot, Paperclip, FileText } from 'lucide-react'; // <--- Importamos Paperclip y FileText
 
 export const ChatInterface: React.FC = () => {
   const [messages, setMessages] = useState<Message[]>([
     {
       id: '1',
-      text: '¡Hola! Soy el asistente virtual del MinCYT. ¿En qué puedo ayudarte hoy respecto a ciencia, tecnología o innovación?',
+      text: '¡Hola! Soy el asistente virtual del MinCYT. ¿En qué puedo ayudarte hoy? Puedes preguntarme sobre la agenda o subir un PDF para que lo analice.',
       sender: 'bot',
       timestamp: new Date()
     }
   ]);
   const [inputValue, setInputValue] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [isUploading, setIsUploading] = useState(false); // Estado para la subida de archivo
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null); // Referencia al input oculto
 
-  // Auto-scroll hacia abajo cuando hay mensajes nuevos
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
 
   useEffect(() => {
     scrollToBottom();
-  }, [messages, isLoading]);
+  }, [messages, isLoading, isUploading]);
 
   const handleSendMessage = async () => {
-    if (!inputValue.trim() || isLoading) return;
+    if (!inputValue.trim() || isLoading || isUploading) return;
 
     const userText = inputValue.trim();
     setInputValue('');
 
-    // 1. Agregar mensaje del usuario
     const userMessage: Message = {
       id: Date.now().toString(),
       text: userText,
@@ -43,10 +43,8 @@ export const ChatInterface: React.FC = () => {
     setIsLoading(true);
 
     try {
-      // 2. Llamar a Gemini
       const responseText = await sendMessageToGemini(userText);
-
-      // 3. Agregar respuesta del bot
+      
       const botMessage: Message = {
         id: (Date.now() + 1).toString(),
         text: responseText,
@@ -56,7 +54,6 @@ export const ChatInterface: React.FC = () => {
       setMessages(prev => [...prev, botMessage]);
     } catch (error) {
       console.error("Error:", error);
-      // Mensaje de error amigable
       const errorMessage: Message = {
         id: (Date.now() + 1).toString(),
         text: "Lo siento, tuve un problema de conexión. Por favor intenta de nuevo.",
@@ -69,7 +66,60 @@ export const ChatInterface: React.FC = () => {
     }
   };
 
-  // Enviar con Enter
+  // Manejar clic en el clip
+  const handleFileClick = () => {
+    fileInputRef.current?.click();
+  };
+
+  // Manejar selección de archivo
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (file.type !== 'application/pdf') {
+        alert("Solo se permiten archivos PDF");
+        return;
+    }
+
+    setIsUploading(true);
+    
+    // Mensaje visual de "Subiendo..."
+    const uploadingMsg: Message = {
+        id: Date.now().toString(),
+        text: `📎 Subiendo documento: ${file.name}...`,
+        sender: 'user',
+        timestamp: new Date(),
+    };
+    setMessages(prev => [...prev, uploadingMsg]);
+
+    try {
+        // 1. Subir al backend
+        const respuestaServidor = await uploadFile(file);
+
+        // 2. Respuesta del bot confirmando lectura
+        const botConfirm: Message = {
+            id: (Date.now() + 1).toString(),
+            text: `✅ ${respuestaServidor} Ahora puedes hacerme preguntas sobre el documento.`,
+            sender: 'bot',
+            timestamp: new Date(),
+        };
+        setMessages(prev => [...prev, botConfirm]);
+
+    } catch (error) {
+        const errorMsg: Message = {
+            id: (Date.now() + 1).toString(),
+            text: `❌ Error al subir el archivo: ${error instanceof Error ? error.message : 'Error desconocido'}`,
+            sender: 'bot',
+            timestamp: new Date(),
+        };
+        setMessages(prev => [...prev, errorMsg]);
+    } finally {
+        setIsUploading(false);
+        // Limpiar el input para permitir subir el mismo archivo de nuevo si falla
+        if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  };
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
@@ -80,7 +130,6 @@ export const ChatInterface: React.FC = () => {
   return (
     <div className="flex flex-col min-h-[600px] bg-slate-50 font-sans">
       
-      {/* --- ENCABEZADO --- */}
       <header className="bg-[#002f6c] text-white p-4 shadow-md flex items-center gap-3">
         <div className="p-2 bg-white/10 rounded-full">
             <Bot size={24} />
@@ -91,25 +140,30 @@ export const ChatInterface: React.FC = () => {
         </div>
       </header>
 
-      {/* --- ÁREA DE CHAT --- */}
       <div className="flex-1 max-h-[calc(100vh - 200px)] overflow-y-auto p-4 md:p-8 w-full max-w-4xl mx-auto scrollbar-hide">
         {messages.map((msg) => (
           <MessageBubble key={msg.id} message={msg} />
         ))}
 
-        {/* Animación de "Escribiendo..." */}
-        {isLoading && (
+        {(isLoading || isUploading) && (
           <div className="flex justify-start w-full mb-6 animate-pulse">
             <div className="flex items-center gap-3">
                <div className="w-8 h-8 rounded-full bg-slate-200 flex items-center justify-center">
                   <Bot size={16} className="text-slate-500"/>
                </div>
-               <div className="bg-slate-100 px-4 py-3 rounded-2xl rounded-tl-none border border-slate-200">
-                  <div className="flex space-x-1">
-                    <div className="w-2 h-2 bg-slate-400 rounded-full animate-bounce"></div>
-                    <div className="w-2 h-2 bg-slate-400 rounded-full animate-bounce delay-75"></div>
-                    <div className="w-2 h-2 bg-slate-400 rounded-full animate-bounce delay-150"></div>
-                  </div>
+               <div className="bg-slate-100 px-4 py-3 rounded-2xl rounded-tl-none border border-slate-200 flex items-center gap-2">
+                  {isUploading ? (
+                      <>
+                        <FileText size={16} className="text-slate-500" />
+                        <span className="text-xs text-slate-500">Leyendo documento...</span>
+                      </>
+                  ) : (
+                      <div className="flex space-x-1">
+                        <div className="w-2 h-2 bg-slate-400 rounded-full animate-bounce"></div>
+                        <div className="w-2 h-2 bg-slate-400 rounded-full animate-bounce delay-75"></div>
+                        <div className="w-2 h-2 bg-slate-400 rounded-full animate-bounce delay-150"></div>
+                      </div>
+                  )}
                </div>
             </div>
           </div>
@@ -117,25 +171,41 @@ export const ChatInterface: React.FC = () => {
         <div ref={messagesEndRef} />
       </div>
 
-      {/* --- ÁREA DE INPUT --- */}
       <div className="p-4 bg-white border-t border-slate-200 shadow-lg z-20">
         <div className="max-w-4xl mx-auto relative flex items-end gap-2 bg-slate-100 rounded-3xl p-2 border border-slate-300 focus-within:ring-2 focus-within:ring-blue-500 focus-within:border-transparent">
           
+          {/* --- BOTÓN DE ADJUNTAR (NUEVO) --- */}
+          <input 
+            type="file" 
+            accept="application/pdf" 
+            ref={fileInputRef} 
+            onChange={handleFileChange} 
+            className="hidden" 
+          />
+          <button
+            onClick={handleFileClick}
+            disabled={isLoading || isUploading}
+            className="flex-shrink-0 p-3 rounded-full mb-1 text-slate-500 hover:bg-slate-200 transition-colors"
+            title="Adjuntar PDF"
+          >
+            <Paperclip size={20} />
+          </button>
+
           <textarea
             value={inputValue}
             onChange={(e) => setInputValue(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="Escribe tu consulta aquí..."
-            className="w-full bg-transparent border-none focus:ring-0 resize-none max-h-32 min-h-[44px] py-3 px-4 text-slate-800 placeholder:text-slate-500 outline-none"
+            placeholder="Escribe tu consulta..."
+            className="w-full bg-transparent border-none focus:ring-0 resize-none max-h-32 min-h-[44px] py-3 px-2 text-slate-800 placeholder:text-slate-500 outline-none"
             rows={1}
-            disabled={isLoading}
+            disabled={isLoading || isUploading}
           />
 
           <button
             onClick={handleSendMessage}
-            disabled={!inputValue.trim() || isLoading}
+            disabled={!inputValue.trim() || isLoading || isUploading}
             className={`flex-shrink-0 p-3 rounded-full mb-1 transition-all duration-200 ${
-              !inputValue.trim() || isLoading
+              !inputValue.trim() || isLoading || isUploading
                 ? 'bg-slate-300 text-slate-500 cursor-not-allowed'
                 : 'bg-blue-600 text-white hover:bg-blue-700 shadow-md hover:scale-105 active:scale-95'
             }`}
