@@ -1,34 +1,24 @@
 import os
-from fastapi import FastAPI, HTTPException, UploadFile, File
+from fastapi import FastAPI, HTTPException, UploadFile, File 
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from agents.main_agent import get_agent_response
 from tools.dashboard import obtener_datos_raw
-from tools.docs import procesar_pdf_subido # <--- NUEVO IMPORT
+from tools.docs import procesar_pdf_subido
 
 app = FastAPI()
 
-# --- CONFIGURACIÓN CORS (Mantenemos la que ya funciona) ---
-origins = [
-    "http://localhost:3000",
-    "http://localhost:5173",
-    "https://pruebamincyt.vercel.app",
-    "https://pruebamincyt.onrender.com",
-    "https://www.pruebamincyt.ar",
-    "https://pruebamincyt.ar",
-    "https://www.pruebasmincyt.ar",
-    "https://pruebasmincyt.ar",
-]
-
+# --- REGLA DE SEGURIDAD CORS: MODO PERMISIVO ("El Martillo") ---
+# En lugar de una lista específica que puede fallar, usamos un Regex que acepta TODO.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
-    allow_origin_regex="https://.*\.vercel\.app",
+    allow_origin_regex=".*",  # <--- ESTO ES LA CLAVE: Acepta cualquier origen
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+# --------------------------------------------------------------
 
 class ChatRequest(BaseModel):
     message: str
@@ -47,7 +37,6 @@ def get_dashboard_data():
     datos = obtener_datos_raw()
     return datos
 
-# --- NUEVO ENDPOINT: SUBIDA DE PDF ---
 @app.post("/api/upload")
 async def upload_file(file: UploadFile = File(...)):
     if not file.filename.endswith('.pdf'):
