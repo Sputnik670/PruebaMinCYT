@@ -1,6 +1,7 @@
 import os
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain.agents import AgentExecutor, create_react_agent
+from langchain.agents import create_react_agent
+from langchain.agents.agent import AgentExecutor
 from langchain_core.prompts import PromptTemplate
 from langchain.tools import Tool
 
