@@ -3,21 +3,19 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain.agents import create_react_agent
 from langchain.agents.agent import AgentExecutor
 from langchain_core.prompts import PromptTemplate
-from langchain.tools import Tool
+# Eliminamos imports no usados para limpiar
 
 from tools.general import get_search_tool
 from tools.dashboard import consultar_calendario
 from tools.email import crear_borrador_email
 
 # 1. Configuración del Modelo (Gemini 1.5 Flash)
-# Requiere que la clave GOOGLE_API_KEY esté vinculada a una cuenta con facturación activa.
+# Usamos el nombre canónico completo para evitar ambigüedades
 llm = ChatGoogleGenerativeAI(
-    model="gemini-1.5-flash", 
+    model="models/gemini-1.5-flash", 
     temperature=0,
     max_retries=2,
-    # AGREGADO: Forzamos la conversión de errores para evitar caídas silenciosas
-    # y aseguramos el transporte correcto si es necesario.
-    transport="rest", 
+    transport="rest", # Forzamos conexión REST estándar que es más estable en servidores
 )
 
 # 2. Prompt ReAct (Optimizado para Gemini)
@@ -53,7 +51,7 @@ agent = AgentExecutor(
     agent=agent_runnable,
     tools=tools,
     verbose=True,
-    handle_parsing_errors=True, # Gemini a veces es hablador, esto lo corrige
+    handle_parsing_errors=True,
     max_iterations=5
 )
 
@@ -64,4 +62,4 @@ def get_agent_response(user_message: str):
         return response["output"]
     except Exception as e:
         print(f"❌ Error Gemini: {str(e)}")
-        return "Lo siento, tuve un problema procesando tu solicitud. Intenta reformular la pregunta."
+        return f"Lo siento, ocurrió un error interno: {str(e)}"
