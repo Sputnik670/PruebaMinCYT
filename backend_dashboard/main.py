@@ -14,7 +14,7 @@ app = FastAPI()
 # En lugar de una lista específica que puede fallar, usamos un Regex que acepta TODO.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins, 
+    allow_origins=["*"], 
     # El regex está bien para Vercel, pero NO cubre tu dominio .ar
     allow_origin_regex=r"https://.*\.vercel\.app", 
     allow_credentials=True,
