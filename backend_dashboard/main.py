@@ -1,7 +1,7 @@
 import os
 from fastapi import FastAPI, HTTPException, UploadFile, File 
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from agents.main_agent import get_agent_response
 from tools.dashboard import obtener_datos_raw
@@ -14,7 +14,9 @@ app = FastAPI()
 # En lugar de una lista específica que puede fallar, usamos un Regex que acepta TODO.
 app.add_middleware(
     CORSMiddleware,
-    allow_origin_regex=".*",  # <--- ESTO ES LA CLAVE: Acepta cualquier origen
+    allow_origins=origins, 
+    # El regex está bien para Vercel, pero NO cubre tu dominio .ar
+    allow_origin_regex=r"https://.*\.vercel\.app", 
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -34,7 +36,7 @@ async def voice_endpoint(file: UploadFile = File(...)):
     return {"text": texto_transcrito}
 
 class ChatRequest(BaseModel):
-    message: str
+    message: str = Field(..., min_length=1, max_length=4000)
 
 @app.get("/")
 def read_root():
@@ -42,8 +44,12 @@ def read_root():
 
 @app.post("/api/chat")
 async def chat_endpoint(request: ChatRequest):
-    respuesta = get_agent_response(request.message)
-    return {"response": respuesta}
+    try:
+        respuesta = get_agent_response(request.message)
+        return {"response": respuesta}
+    except Exception as e:
+        print(f"❌ Error en chat endpoint: {str(e)}")
+        raise HTTPException(status_code=500, detail="Error procesando la solicitud")
 
 @app.get("/api/data")
 def get_dashboard_data():
