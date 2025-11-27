@@ -6,6 +6,7 @@ from pydantic import BaseModel
 from agents.main_agent import get_agent_response
 from tools.dashboard import obtener_datos_raw
 from tools.docs import procesar_pdf_subido
+from tools.audio import procesar_audio_gemini
 
 app = FastAPI()
 
@@ -19,6 +20,18 @@ app.add_middleware(
     allow_headers=["*"],
 )
 # --------------------------------------------------------------
+# --- NUEVO ENDPOINT DE AUDIO ---
+@app.post("/api/voice")
+async def voice_endpoint(file: UploadFile = File(...)):
+    """
+    Endpoint para recibir blobs de audio del micrófono,
+    transcribirlos y traducirlos.
+    """
+    if not file.content_type.startswith('audio/'):
+         raise HTTPException(status_code=400, detail="El archivo debe ser audio")
+    
+    texto_transcrito = procesar_audio_gemini(file)
+    return {"text": texto_transcrito}
 
 class ChatRequest(BaseModel):
     message: str

@@ -25,6 +25,31 @@ export const sendMessageToGemini = async (message: string) => {
   }
 };
 
+// --- NUEVA FUNCIÓN PARA ENVIAR AUDIO ---
+export const sendAudioToGemini = async (audioBlob: Blob) => {
+  const formData = new FormData();
+  // Es importante ponerle nombre y extensión al archivo, aunque sea un blob
+  formData.append('file', audioBlob, 'recording.webm'); 
+
+  try {
+    const response = await fetch(`${API_URL}/api/voice`, {
+      method: 'POST',
+      body: formData,
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(errorData.detail || `Error de audio: ${response.status}`);
+    }
+
+    const data = await response.json();
+    return data.text; // Retorna la transcripción/traducción
+  } catch (error) {
+    console.error("Error enviando audio:", error);
+    throw error;
+  }
+};
+
 // --- NUEVA FUNCIÓN PARA SUBIR PDF ---
 export const uploadFile = async (file: File) => {
   const formData = new FormData();
