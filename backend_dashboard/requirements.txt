@@ -19,3 +19,6 @@ google-auth
 oauth2client
 google-api-python-client
 supabase
+pypdf
+faiss-cpu
+python-multipart
