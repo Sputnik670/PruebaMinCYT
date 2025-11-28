@@ -1,6 +1,3 @@
-import React, { useState, useEffect } from 'react';
-// src/App.jsx (VERSIÓN INTEGRADA)
-
 import { useState, useEffect } from 'react';
 import './App.css';
 // --- NUEVO IMPORT PARA EL CHATBOT ---
