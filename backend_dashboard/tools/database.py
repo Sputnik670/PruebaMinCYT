@@ -66,3 +66,23 @@ def borrar_acta(id_acta: int):
     except Exception as e:
         logger.error(f"Error borrando de Supabase: {e}")
         return False
+    
+def obtener_actas_como_texto():
+    """Convierte el historial de actas en un texto legible para la IA"""
+    # Utilizamos la función existente para obtener los datos
+    actas = obtener_historial_actas()
+    if not actas:
+        return "No hay registros de reuniones anteriores."
+    
+    texto_contexto = "--- HISTORIAL DE REUNIONES (MEMORIA) ---\n"
+    for acta in actas:
+        # Hacemos una limpieza de fecha simple
+        fecha = str(acta.get('created_at', '')).split('T')[0]
+        titulo = acta.get('titulo', 'Sin título')
+        # Usamos el resumen si existe, sino, los primeros 200 caracteres de la transcripción
+        resumen = acta.get('resumen_ia') or acta.get('transcripcion', '')[:200] + "..."
+        
+        texto_contexto += f"ID: {acta.get('id', 'N/A')} | Fecha: {fecha} | Título: {titulo}\n"
+        texto_contexto += f"Resumen/Contenido: {resumen}\n\n"
+    
+    return texto_contexto
