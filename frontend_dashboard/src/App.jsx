@@ -7,7 +7,9 @@ import { MeetingHistory } from './components/MeetingHistory';
 import { LayoutDashboard, RefreshCw, Eye, EyeOff, Bot, FileAudio } from 'lucide-react';
 
 // URL del Backend
-const API_URL = import.meta.env.VITE_BACKEND_URL || "http://localhost:8000";
+let rawUrl = import.meta.env.VITE_BACKEND_URL || "http://localhost:8000";
+const API_URL = rawUrl.replace(/\/api$/, "").replace(/\/$/, "");
+console.log("URL FINAL DEL BACKEND:", API_URL); // Para ver en consola
 
 function App() {
   const [data, setData] = useState([]);
