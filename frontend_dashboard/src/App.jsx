@@ -1,20 +1,21 @@
 import { useState, useEffect } from 'react';
 import './App.css';
-// --- NUEVO IMPORT PARA EL CHATBOT ---
+// --- COMPONENTS ---
 import { ChatInterface } from './components/ChatInterface'; 
 import { MeetingRecorder } from './components/MeetingRecorder';
 import { MeetingHistory } from './components/MeetingHistory'; 
 import { LayoutDashboard, RefreshCw, Eye, EyeOff, Bot, FileAudio } from 'lucide-react';
 
-// --- CONFIGURACIÓN DE LA URL DEL BACKEND (CORREGIDA) ---
-// Paso 1: Obtener la variable de entorno o usar localhost por defecto
+// --- CONFIGURACIÓN ROBUSTA DEL BACKEND ---
+// 1. Obtenemos la variable de entorno (o localhost si no existe)
 const rawUrl = import.meta.env.VITE_BACKEND_URL || "http://localhost:8000";
 
-// Paso 2: Limpiar la URL para evitar dobles barras o dobles '/api'
-// Si la URL termina en '/api' o '/', se lo quitamos para tener una base limpia.
+// 2. LIMPIEZA DE URL: 
+// Si la URL termina en '/api' o en '/', se lo quitamos.
+// Esto asegura que la base sea siempre limpia: "https://tu-backend.onrender.com"
 const API_URL = rawUrl.replace(/\/api\/?$/, "").replace(/\/$/, "");
 
-console.log("Conectando a backend en:", API_URL); // Log para verificar en consola
+console.log("Conectando a:", API_URL); // Para depuración en consola
 
 function App() {
   const [data, setData] = useState([]);
@@ -23,11 +24,12 @@ function App() {
   const [activeTab, setActiveTab] = useState('recorder'); 
 
   const cargarDatos = () => {
-    // Ahora es seguro agregar '/api/data' porque API_URL está limpia
+    // Al tener API_URL limpia, nosotros agregamos '/api/data' manualmente aquí.
+    // Resultado: https://backend...com/api/data (Sin duplicados)
     fetch(`${API_URL}/api/data`)
       .then(res => res.json())
       .then(datos => { if (Array.isArray(datos)) setData(datos); })
-      .catch(error => console.error("Error cargando datos:", error));
+      .catch(error => console.error("Error conectando al backend:", error));
   };
 
   useEffect(() => { cargarDatos(); }, []);
@@ -77,7 +79,7 @@ function App() {
           <div className="overflow-x-auto">
             {data.length === 0 ? (
               <div className="p-12 text-center text-slate-500">
-                <p>Cargando datos del sistema...</p>
+                <p>Esperando conexión con el servidor...</p>
               </div>
             ) : (
               <table className="w-full text-sm text-left">
