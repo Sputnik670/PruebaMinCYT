@@ -7,15 +7,10 @@ import { MeetingHistory } from './components/MeetingHistory';
 import { LayoutDashboard, RefreshCw, Eye, EyeOff, Bot, FileAudio } from 'lucide-react';
 
 // --- CONFIGURACIÓN ROBUSTA DEL BACKEND ---
-// 1. Obtenemos la variable de entorno (o localhost si no existe)
 const rawUrl = import.meta.env.VITE_BACKEND_URL || "http://localhost:8000";
-
-// 2. LIMPIEZA DE URL: 
-// Si la URL termina en '/api' o en '/', se lo quitamos.
-// Esto asegura que la base sea siempre limpia: "https://tu-backend.onrender.com"
 const API_URL = rawUrl.replace(/\/api\/?$/, "").replace(/\/$/, "");
 
-console.log("Conectando a:", API_URL); // Para depuración en consola
+console.log("Conectando a:", API_URL); 
 
 function App() {
   const [data, setData] = useState([]);
@@ -23,9 +18,17 @@ function App() {
   const [mostrarTabla, setMostrarTabla] = useState(true);
   const [activeTab, setActiveTab] = useState('recorder'); 
 
+  // --- NUEVO: Estado para forzar la recarga del historial ---
+  const [refreshTrigger, setRefreshTrigger] = useState(0);
+
+  // --- NUEVO: Función que llama el Recorder cuando termina ---
+  const handleUploadSuccess = () => {
+    console.log("Audio subido con éxito, actualizando historial...");
+    setRefreshTrigger(prev => prev + 1);
+    setActiveTab('history'); // Opcional: Cambiar a la pestaña de historial automáticamente
+  };
+
   const cargarDatos = () => {
-    // Al tener API_URL limpia, nosotros agregamos '/api/data' manualmente aquí.
-    // Resultado: https://backend...com/api/data (Sin duplicados)
     fetch(`${API_URL}/api/data`)
       .then(res => res.json())
       .then(datos => { if (Array.isArray(datos)) setData(datos); })
@@ -37,6 +40,8 @@ function App() {
   const sincronizar = async () => {
     setSyncing(true);
     await cargarDatos();
+    // También actualizamos el historial manual
+    setRefreshTrigger(prev => prev + 1);
     setTimeout(() => { setSyncing(false); alert("Datos actualizados."); }, 800); 
   };
 
@@ -73,9 +78,9 @@ function App() {
         </div>
       </header>
 
-      {/* --- SECCIÓN 1: TABLA DE DATOS (GLASS) --- */}
+      {/* --- SECCIÓN 1: TABLA DE DATOS --- */}
       {mostrarTabla && (
-        <div className="bg-slate-900/40 backdrop-blur-md border border-white/10 rounded-2xl overflow-hidden mb-8 shadow-2xl">
+        <div className="bg-white text-slate-900 rounded-2xl overflow-hidden mb-8 shadow-xl border border-slate-200">
           <div className="overflow-x-auto">
             {data.length === 0 ? (
               <div className="p-12 text-center text-slate-500">
@@ -83,18 +88,18 @@ function App() {
               </div>
             ) : (
               <table className="w-full text-sm text-left">
-                <thead className="bg-white/5 text-slate-300 uppercase text-xs tracking-wider font-semibold">
+                <thead className="bg-slate-100 text-slate-900 uppercase text-xs tracking-wider font-bold border-b border-slate-300">
                   <tr>
                     {columnas.map((col) => (
-                      <th key={col} className="px-6 py-4 border-b border-white/5">{col}</th>
+                      <th key={col} className="px-6 py-4">{col}</th>
                     ))}
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-white/5">
+                <tbody className="divide-y divide-slate-200">
                   {data.slice(0, 8).map((row, i) => (
-                    <tr key={i} className="hover:bg-white/[0.02] transition-colors group">
+                    <tr key={i} className="hover:bg-slate-50 transition-colors">
                       {columnas.map((col) => (
-                        <td key={col} className="px-6 py-4 text-slate-400 whitespace-nowrap group-hover:text-slate-200 transition-colors">
+                        <td key={col} className="px-6 py-4 whitespace-nowrap text-slate-700 font-medium">
                           {row[col] ? row[col].toString().substring(0, 50) + (row[col].toString().length > 50 ? '...' : '') : '-'}
                         </td>
                       ))}
@@ -104,9 +109,9 @@ function App() {
               </table>
             )}
           </div>
-          <div className="bg-white/[0.02] px-6 py-2 border-t border-white/5 flex justify-between items-center">
-             <p className="text-[10px] text-slate-500 uppercase tracking-widest">Vista Previa • Conexión Segura</p>
-             {data.length > 8 && <span className="text-xs text-slate-500">Mostrando 8 de {data.length} registros</span>}
+          <div className="bg-slate-50 px-6 py-2 border-t border-slate-200 flex justify-between items-center text-slate-500">
+             <p className="text-[10px] uppercase tracking-widest font-semibold">Vista Previa • Datos en vivo</p>
+             {data.length > 8 && <span className="text-xs">Mostrando 8 de {data.length} registros</span>}
           </div>
         </div>
       )}
@@ -116,7 +121,6 @@ function App() {
         
         {/* Columna Izquierda: CHATBOT */}
         <div className="rounded-2xl overflow-hidden shadow-2xl border border-white/10 bg-slate-900/60 backdrop-blur-xl flex flex-col">
-            {/* Header Chat */}
             <div className="bg-white/5 p-4 border-b border-white/5 flex items-center justify-between">
                 <div className="flex items-center gap-3">
                     <div className="p-2 bg-blue-500/20 rounded-lg text-blue-400 border border-blue-500/30">
@@ -132,7 +136,6 @@ function App() {
                 </div>
             </div>
             
-            {/* Cuerpo Chat */}
             <div className="flex-1 overflow-hidden relative bg-transparent">
                 <ChatInterface /> 
             </div>
@@ -171,10 +174,12 @@ function App() {
             {/* Contenido Dinámico */}
             <div className="flex-1 p-0 relative overflow-hidden bg-transparent">
                 {activeTab === 'recorder' ? (
-                    <MeetingRecorder />
+                    // Pasamos la función handleUploadSuccess al Recorder
+                    <MeetingRecorder onUploadSuccess={handleUploadSuccess} />
                 ) : (
                     <div className="h-full p-6 overflow-y-auto custom-scrollbar">
-                        <MeetingHistory />
+                        {/* Pasamos el refreshTrigger al History */}
+                        <MeetingHistory refreshTrigger={refreshTrigger} />
                     </div>
                 )}
             </div>

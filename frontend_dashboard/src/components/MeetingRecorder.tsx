@@ -1,145 +1,125 @@
-import React, { useState, useRef } from 'react';
-import { Mic, Square, Download, Trash2, Copy, Loader2, Wand2 } from 'lucide-react';
+import { useState, useRef } from 'react';
+import { Mic, Square, Loader2, FileText } from 'lucide-react';
 import { sendAudioToGemini } from '../services/geminiService';
 
-// AQUÍ ESTÁ EL CAMBIO IMPORTANTE: Se llama MeetingRecorder y vive en MeetingRecorder.tsx
-export const MeetingRecorder: React.FC = () => {
+// Definimos que este componente puede recibir una función opcional
+export const MeetingRecorder = ({ onUploadSuccess }: { onUploadSuccess?: () => void }) => {
   const [isRecording, setIsRecording] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
-  const [transcription, setTranscription] = useState('');
+  const [transcript, setTranscript] = useState<string | null>(null);
   
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-
-  // Lógica de Grabación (INTACTA)
-  const handleMicClick = async () => {
-    if (isRecording) {
-      stopRecording();
-      return;
-    }
-    startRecording();
-  };
+  const chunksRef = useRef<Blob[]>([]);
 
   const startRecording = async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const mediaRecorder = new MediaRecorder(stream);
       mediaRecorderRef.current = mediaRecorder;
-      const chunks: BlobPart[] = [];
+      chunksRef.current = [];
 
-      mediaRecorder.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
+      mediaRecorder.ondataavailable = (e) => {
+        if (e.data.size > 0) {
+          chunksRef.current.push(e.data);
+        }
+      };
 
       mediaRecorder.onstop = async () => {
-        const audioBlob = new Blob(chunks, { type: 'audio/webm' });
+        const audioBlob = new Blob(chunksRef.current, { type: 'audio/webm' });
+        await handleAudioUpload(audioBlob);
         stream.getTracks().forEach(track => track.stop());
-        await processAudio(audioBlob);
       };
 
       mediaRecorder.start();
       setIsRecording(true);
+      setTranscript(null);
     } catch (err) {
-      console.error("Error mic:", err);
-      alert("No se pudo acceder al micrófono.");
+      console.error("Error accediendo al micrófono:", err);
+      alert("No se pudo acceder al micrófono. Verifique los permisos.");
     }
   };
 
   const stopRecording = () => {
-    mediaRecorderRef.current?.stop();
-    setIsRecording(false);
+    if (mediaRecorderRef.current && isRecording) {
+      mediaRecorderRef.current.stop();
+      setIsRecording(false);
+      setIsProcessing(true);
+    }
   };
 
-  const processAudio = async (audioBlob: Blob) => {
-    setIsProcessing(true);
+  const handleAudioUpload = async (audioBlob: Blob) => {
     try {
       const text = await sendAudioToGemini(audioBlob);
-      setTranscription(prev => {
-        const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-        return prev + (prev ? '\n\n' : '') + `[${time}] ${text}`;
-      });
+      setTranscript(text);
+      
+      // ¡AQUÍ ESTÁ EL CAMBIO! Avisamos al padre (App.jsx) que terminamos
+      if (onUploadSuccess) {
+        onUploadSuccess();
+      }
+
     } catch (error) {
-      console.error("Error procesando reunión:", error);
-      alert("Error al transcribir. Ver consola.");
+      console.error(error);
+      alert("Error procesando el audio. Intente nuevamente.");
     } finally {
       setIsProcessing(false);
     }
   };
 
-  // Helpers de UI
-  const handleDownload = () => {
-    if (!transcription) return;
-    const element = document.createElement("a");
-    const file = new Blob([transcription], {type: 'text/plain'});
-    element.href = URL.createObjectURL(file);
-    element.download = `Reunion_${new Date().toISOString().slice(0,10)}.txt`;
-    document.body.appendChild(element);
-    element.click();
-    document.body.removeChild(element);
-  };
-
-  const handleCopy = () => {
-    navigator.clipboard.writeText(transcription);
-  };
-
-  const handleClear = () => {
-    if (window.confirm("¿Borrar acta actual?")) setTranscription('');
-  };
-
   return (
-    <div className="flex flex-col h-full bg-transparent relative">
-      {/* Header Interno */}
-      <div className="p-6 pb-4 flex justify-between items-end z-10">
+    <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
+      <div className="flex flex-col items-center gap-4 text-center">
+        <div className={`p-4 rounded-full transition-all duration-500 ${isRecording ? 'bg-red-100 animate-pulse' : 'bg-blue-50'}`}>
+          <Mic className={`w-8 h-8 ${isRecording ? 'text-red-500' : 'text-blue-600'}`} />
+        </div>
+        
         <div>
-            <h2 className="text-lg font-medium text-white flex items-center gap-2">
-                <Wand2 size={16} className="text-purple-400"/> Transcripción Inteligente
-            </h2>
-            <p className="text-xs text-slate-400 mt-1">Gemini escuchará y redactará el acta automáticamente.</p>
+          <h3 className="font-semibold text-slate-900">Grabar Reunión</h3>
+          <p className="text-sm text-slate-500 mt-1">
+            {isRecording 
+              ? "Grabando... (Haga click en parar para finalizar)" 
+              : "El asistente transcribirá y analizará la reunión."} 
+          </p>
         </div>
-        {isProcessing && (
-            <div className="flex items-center gap-2 text-blue-400 text-xs bg-blue-500/10 px-3 py-1.5 rounded-full border border-blue-500/20 animate-pulse">
-                <Loader2 size={12} className="animate-spin"/> Procesando audio...
-            </div>
+
+        {!isRecording ? (
+          <button
+            onClick={startRecording}
+            disabled={isProcessing}
+            className="px-6 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium transition-colors flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {isProcessing ? (
+              <>
+                <Loader2 className="w-4 h-4 animate-spin" />
+                Procesando...
+              </>
+            ) : (
+              <>
+                <Mic className="w-4 h-4" />
+                Iniciar Grabación
+              </>
+            )}
+          </button>
+        ) : (
+          <button
+            onClick={stopRecording}
+            className="px-6 py-2.5 bg-red-500 hover:bg-red-600 text-white rounded-lg font-medium transition-colors flex items-center gap-2"
+          >
+            <Square className="w-4 h-4 fill-current" />
+            Detener y Procesar
+          </button>
         )}
-      </div>
 
-      {/* Área de Texto */}
-      <div className="flex-1 px-6 pb-24 overflow-hidden">
-         <div className="h-full w-full bg-black/20 border border-white/5 rounded-xl relative group transition-all hover:border-white/10 hover:bg-black/30">
-            <textarea 
-                className="w-full h-full bg-transparent p-6 text-slate-300 placeholder:text-slate-600 focus:ring-0 border-none outline-none resize-none font-mono text-sm leading-relaxed scrollbar-hide"
-                placeholder="Presiona 'Grabar' para comenzar la reunión..."
-                value={transcription}
-                onChange={(e) => setTranscription(e.target.value)}
-            />
-         </div>
-      </div>
-
-      {/* Toolbar */}
-      <div className="absolute bottom-6 left-6 right-6 h-20 z-20">
-        <div className="h-full bg-slate-900/80 backdrop-blur-md border border-white/10 rounded-2xl p-4 flex items-center justify-between gap-4 shadow-xl">
-            <button
-                onClick={handleMicClick}
-                disabled={isProcessing}
-                className={`flex items-center gap-3 px-6 py-3 rounded-xl font-semibold transition-all duration-300 shadow-lg min-w-[140px] justify-center ${
-                    isRecording 
-                    ? 'bg-red-500/90 hover:bg-red-600 text-white shadow-red-500/20 animate-pulse' 
-                    : 'bg-blue-600 hover:bg-blue-500 text-white shadow-blue-500/20 hover:scale-105'
-                } ${isProcessing ? 'opacity-50 cursor-not-allowed' : ''}`}
-            >
-                {isRecording ? <Square size={18} fill="currentColor" /> : <Mic size={18} />}
-                <span className="tracking-wide text-sm">{isRecording ? "DETENER" : "GRABAR"}</span>
-            </button>
-
-            <div className="flex gap-1 border-l border-white/10 pl-4">
-                <button onClick={handleCopy} disabled={!transcription} className="p-3 text-slate-400 hover:text-white hover:bg-white/10 rounded-lg transition-colors" title="Copiar">
-                    <Copy size={18} />
-                </button>
-                <button onClick={handleDownload} disabled={!transcription} className="p-3 text-slate-400 hover:text-emerald-400 hover:bg-emerald-500/10 rounded-lg transition-colors" title="Descargar">
-                    <Download size={18} />
-                </button>
-                <button onClick={handleClear} disabled={!transcription} className="p-3 text-slate-400 hover:text-red-400 hover:bg-red-500/10 rounded-lg transition-colors" title="Limpiar">
-                    <Trash2 size={18} />
-                </button>
+        {transcript && (
+          <div className="w-full mt-4 p-4 bg-slate-50 rounded-lg border border-slate-200 text-left">
+            <div className="flex items-center gap-2 mb-2 text-slate-800 font-medium">
+              <FileText className="w-4 h-4 text-green-600" />
+              Transcripción Generada:
             </div>
-        </div>
+            <p className="text-slate-700 text-sm leading-relaxed whitespace-pre-wrap">
+              {transcript}
+            </p>
+          </div>
+        )}
       </div>
     </div>
   );

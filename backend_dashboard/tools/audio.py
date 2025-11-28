@@ -7,6 +7,13 @@ from pathlib import Path
 import google.generativeai as genai
 from fastapi import UploadFile, HTTPException
 
+# --- CAMBIO 1: Importamos la función de guardado desde database.py ---
+# Usamos try/except para manejar diferentes contextos de ejecución (script vs módulo)
+try:
+    from .database import guardar_acta
+except ImportError:
+    from backend_dashboard.tools.database import guardar_acta
+
 # Configurar logger local
 logger = logging.getLogger(__name__)
 
@@ -19,7 +26,8 @@ else:
 
 def procesar_audio_gemini(file: UploadFile) -> str:
     """
-    Recibe un archivo de audio, valida su integridad y lo envía a Gemini.
+    Recibe un archivo de audio, valida su integridad, lo transcribe con Gemini
+    y guarda el respaldo automáticamente en Supabase.
     """
     tmp_path = None
     
@@ -28,7 +36,6 @@ def procesar_audio_gemini(file: UploadFile) -> str:
             raise ValueError("La API Key de Google no está configurada.")
 
         # 2. Guardar temporalmente y VALIDAR TAMAÑO
-        # Usamos .webm explícitamente si viene del navegador
         suffix = Path(file.filename).suffix or ".webm"
         
         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
@@ -39,14 +46,12 @@ def procesar_audio_gemini(file: UploadFile) -> str:
         file_size = os.path.getsize(tmp_path)
         logger.info(f"🎙️ Archivo guardado: {tmp_path} | Tamaño: {file_size} bytes")
         
-        if file_size < 1000: # Menos de 1KB es sospechoso (probablemente silencio o error)
-            raise ValueError(f"El audio grabado es demasiado corto o está vacío ({file_size} bytes). Intenta hablar más fuerte o por más tiempo.")
+        if file_size < 1000: 
+            raise ValueError(f"El audio grabado es demasiado corto ({file_size} bytes).")
 
         try:
             # 3. Subir a Gemini con MimeType EXPLÍCITO
             logger.info(f"Subiendo a Gemini (Mime: {file.content_type})...")
-            
-            # Forzamos el mime_type si es webm para asegurar que Gemini lo entienda
             mime = "audio/webm" if suffix == ".webm" else file.content_type
             
             audio_file = genai.upload_file(path=tmp_path, mime_type=mime)
@@ -58,12 +63,11 @@ def procesar_audio_gemini(file: UploadFile) -> str:
                 audio_file = genai.get_file(audio_file.name)
             
             if audio_file.state.name == "FAILED":
-                logger.error(f"Estado del archivo en Gemini: {audio_file.state.name}")
-                raise ValueError("Gemini rechazó el archivo de audio (Estado FAILED). Posible formato corrupto.")
+                raise ValueError("Gemini rechazó el archivo de audio.")
             
             logger.info(f"✅ Audio listo: {audio_file.name}")
 
-            # 5. Generar contenido
+            # 5. Generar contenido (Transcripción)
             model = genai.GenerativeModel('gemini-2.5-flash')
             
             prompt = (
@@ -72,19 +76,28 @@ def procesar_audio_gemini(file: UploadFile) -> str:
             )
 
             response = model.generate_content([prompt, audio_file])
-            return response.text
+            texto_transcrito = response.text  # Guardamos el texto en una variable
+
+            # --- CAMBIO 2: Guardar respaldo en Supabase ---
+            if texto_transcrito:
+                logger.info("💾 Respaldando acta en Supabase...")
+                try:
+                    # Llamamos a la función que importamos arriba
+                    guardar_acta(transcripcion=texto_transcrito) 
+                except Exception as db_error:
+                    # Si falla la base de datos, solo logueamos el error pero NO detenemos el proceso
+                    # para que el usuario al menos reciba su transcripción en pantalla.
+                    logger.error(f"⚠️ Alerta: No se pudo guardar en Supabase: {db_error}")
+            
+            return texto_transcrito
 
         finally:
             # Limpieza de archivo local
             if tmp_path and os.path.exists(tmp_path):
                 os.remove(tmp_path)
-            # Limpieza en la nube (opcional para ahorrar espacio)
-            # if 'audio_file' in locals():
-            #    audio_file.delete()
 
     except Exception as e:
         logger.error(f"❌ Error en procesar_audio_gemini: {str(e)}", exc_info=True)
-        # Devolvemos un mensaje limpio al usuario
         msg_error = str(e)
         if "400" in msg_error: msg_error = "Error de formato de audio."
         raise HTTPException(status_code=500, detail=msg_error)
