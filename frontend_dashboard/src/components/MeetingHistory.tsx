@@ -29,7 +29,12 @@ export const MeetingHistory: React.FC = () => {
                 <span className="flex items-center gap-1"><Calendar size={12}/> {acta.fecha}</span>
                 <span className="flex items-center gap-1"><Clock size={12}/> {acta.hora}</span>
              </div>
-             <button className="text-blue-400 hover:text-blue-300 transition-colors">
+             {/* CORRECCIÓN AQUÍ: Se agregaron title y aria-label */}
+             <button 
+                className="text-blue-400 hover:text-blue-300 transition-colors"
+                title="Descargar acta"
+                aria-label="Descargar acta"
+             >
                 <Download size={16} />
              </button>
           </div>
