@@ -1,8 +1,8 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Message } from '../types/types';
-import { sendMessageToGemini, uploadFile } from '../services/geminiService';
+import { sendMessageToGemini, uploadFile, sendAudioToGemini } from '../services/geminiService'; // Importamos sendAudioToGemini
 import { MessageBubble } from './MessageBubble';
-import { Send, Loader2, Bot, Paperclip, FileText, Mic, Square } from 'lucide-react'; // <--- Agregamos Mic y Square
+import { Send, Loader2, Bot, Paperclip, FileText, Mic, Square } from 'lucide-react';
 
 export const ChatInterface: React.FC = () => {
   const [messages, setMessages] = useState<Message[]>([
@@ -16,11 +16,11 @@ export const ChatInterface: React.FC = () => {
   const [inputValue, setInputValue] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
-  const [isRecording, setIsRecording] = useState(false); // <--- Estado para grabación
+  const [isRecording, setIsRecording] = useState(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null); // <--- Ref para el grabador
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -32,14 +32,12 @@ export const ChatInterface: React.FC = () => {
 
   // --- LÓGICA DE AUDIO ---
   const handleMicClick = async () => {
-    // Si ya está grabando, detenemos
     if (isRecording) {
       mediaRecorderRef.current?.stop();
       setIsRecording(false);
       return;
     }
 
-    // Si no está grabando, iniciamos
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const mediaRecorder = new MediaRecorder(stream);
@@ -51,13 +49,8 @@ export const ChatInterface: React.FC = () => {
       };
 
       mediaRecorder.onstop = async () => {
-        // Al detener, creamos el blob y lo enviamos
         const audioBlob = new Blob(chunks, { type: 'audio/webm' });
-        
-        // Limpiamos los tracks para apagar el micrófono del navegador
         stream.getTracks().forEach(track => track.stop());
-
-        // Enviamos al backend
         await sendAudioToBackend(audioBlob);
       };
 
@@ -72,25 +65,12 @@ export const ChatInterface: React.FC = () => {
 
   const sendAudioToBackend = async (audioBlob: Blob) => {
     setIsLoading(true);
-    const formData = new FormData();
-    formData.append('file', audioBlob, 'recording.webm');
-
     try {
-      // Asumiendo que tu backend corre en el puerto 8000 localmente
-      const response = await fetch('http://127.0.0.1:8000/api/voice', {
-        method: 'POST',
-        body: formData,
-      });
-
-      if (!response.ok) {
-        throw new Error('Error en la transcripción del servidor');
-      }
-
-      const data = await response.json();
+      // Usamos el servicio centralizado en lugar del fetch hardcodeado
+      const text = await sendAudioToGemini(audioBlob);
       
-      // Ponemos el texto transcrito en el input para que el usuario lo revise
-      if (data.text) {
-        setInputValue((prev) => (prev ? prev + ' ' : '') + data.text);
+      if (text) {
+        setInputValue((prev) => (prev ? prev + ' ' : '') + text);
       }
 
     } catch (error) {
@@ -265,7 +245,6 @@ export const ChatInterface: React.FC = () => {
             <Paperclip size={20} />
           </button>
 
-          {/* --- BOTÓN DE MICRÓFONO (NUEVO) --- */}
           <button
             onClick={handleMicClick}
             disabled={isLoading || isUploading}

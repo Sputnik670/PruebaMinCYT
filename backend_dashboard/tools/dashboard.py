@@ -1,8 +1,12 @@
 import os
 import json
 import gspread
+import logging
 from google.oauth2 import service_account
 from langchain.tools import tool
+
+# Configurar Logger específico para este módulo
+logger = logging.getLogger(__name__)
 
 # ID del Google Sheet Nativo
 SPREADSHEET_ID = "1lkViCdCeq7F4yEHVdbjfrV-G7KvKP6TZfxsOc-Ov4xI"
@@ -12,7 +16,10 @@ def autenticar_google_sheets():
     try:
         private_key = os.getenv("GOOGLE_PRIVATE_KEY")
         client_email = os.getenv("GOOGLE_CLIENT_EMAIL")
-        if not private_key or not client_email: return None
+        
+        if not private_key or not client_email: 
+            logger.warning("⚠️ Falta GOOGLE_PRIVATE_KEY o GOOGLE_CLIENT_EMAIL en variables de entorno.")
+            return None
         
         creds_dict = {
             "type": "service_account",
@@ -31,20 +38,27 @@ def autenticar_google_sheets():
             "https://www.googleapis.com/auth/drive"
         ])
         return gspread.authorize(creds)
-    except Exception:
+    except Exception as e:
+        # PUNTO 7: Capturamos la excepción real y la logueamos
+        logger.error(f"❌ Error crítico autenticando Google Sheets: {str(e)}", exc_info=True)
         return None
 
 def obtener_datos_raw():
     try:
         client = autenticar_google_sheets()
-        if not client: return []
+        if not client: 
+            logger.warning("No se pudo obtener el cliente de GSpread. Verifica credenciales.")
+            return []
         
         # Abrir por ID
         sh = client.open_by_key(SPREADSHEET_ID)
         try:
             worksheet = sh.get_worksheet_by_id(WORKSHEET_GID)
-            if not worksheet: worksheet = sh.sheet1
-        except:
+            if not worksheet: 
+                logger.info("Worksheet GID no encontrado, usando sheet1 por defecto.")
+                worksheet = sh.sheet1
+        except Exception as e:
+            logger.warning(f"Error accediendo al worksheet por ID, intentando sheet1. Detalle: {e}")
             worksheet = sh.sheet1
 
         data = worksheet.get_all_values()
@@ -68,12 +82,12 @@ def obtener_datos_raw():
             
         return res
     except Exception as e:
-        print(f"Error Sheet: {e}")
+        # PUNTO 6: Usamos logger en lugar de print
+        logger.error(f"❌ Error obteniendo datos del Sheet: {str(e)}", exc_info=True)
         return []
 
 @tool
 def consultar_calendario(consulta: str):
     """Consulta la agenda del ministerio completa."""
     d = obtener_datos_raw()
-    # DEUDA TÉCNICA RESUELTA: Quitamos el límite [:10]
     return json.dumps(d, ensure_ascii=False)
