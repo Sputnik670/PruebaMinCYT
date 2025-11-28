@@ -1,19 +1,17 @@
 import { useEffect, useState } from 'react';
 import { FileText, Calendar, Clock, Download, Loader2, Trash2 } from 'lucide-react';
 
-// Recibimos el trigger
+// Recibimos el trigger para recargar la lista
 export const MeetingHistory = ({ refreshTrigger }: { refreshTrigger: number }) => {
   const [actas, setActas] = useState([]);
   const [loading, setLoading] = useState(true);
   
-  // Usamos la misma URL base que en App.jsx
   const rawUrl = import.meta.env.VITE_BACKEND_URL || "http://localhost:8000";
   const API_URL = rawUrl.replace(/\/api\/?$/, "").replace(/\/$/, "");
 
   const fetchHistorial = async () => {
     setLoading(true);
     try {
-      // Asumimos que existe este endpoint según tu database.py
       const response = await fetch(`${API_URL}/actas`); 
       if (response.ok) {
         const data = await response.json();
@@ -28,21 +26,56 @@ export const MeetingHistory = ({ refreshTrigger }: { refreshTrigger: number }) =
     }
   };
 
-  // Este efecto se ejecuta cuando cambia el refreshTrigger
   useEffect(() => {
     fetchHistorial();
   }, [refreshTrigger]);
 
-  // Función auxiliar para borrar (opcional)
   const borrarActa = async (id: number) => {
       if(!confirm("¿Seguro que deseas eliminar esta acta?")) return;
       try {
           await fetch(`${API_URL}/actas/${id}`, { method: 'DELETE' });
-          fetchHistorial(); // Recargar lista
+          fetchHistorial(); 
       } catch (e) {
           console.error(e);
       }
   }
+
+  // --- NUEVA FUNCIÓN DE DESCARGA ---
+  const descargarActa = (acta: any) => {
+    try {
+        // 1. Preparamos el contenido del archivo
+        const contenido = [
+            "========================================",
+            `TITULO: ${acta.titulo || "Reunión sin título"}`,
+            `FECHA: ${new Date(acta.created_at).toLocaleString()}`,
+            "========================================",
+            "\n--- RESUMEN IA ---",
+            acta.resumen_ia || "No disponible",
+            "\n--- TRANSCRIPCIÓN COMPLETA ---",
+            acta.transcripcion || ""
+        ].join("\n");
+
+        // 2. Creamos un 'Blob' (un archivo en memoria)
+        const blob = new Blob([contenido], { type: 'text/plain' });
+        
+        // 3. Creamos un enlace temporal para forzar la descarga
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        // Nombre del archivo: Acta-ID-Fecha.txt
+        a.download = `Acta-${acta.id}-${new Date(acta.created_at).toISOString().split('T')[0]}.txt`;
+        
+        document.body.appendChild(a);
+        a.click();
+        
+        // 4. Limpieza
+        document.body.removeChild(a);
+        window.URL.revokeObjectURL(url);
+    } catch (error) {
+        console.error("Error al descargar:", error);
+        alert("No se pudo generar el archivo de descarga.");
+    }
+  };
 
   if (loading && actas.length === 0) {
     return (
@@ -86,7 +119,6 @@ export const MeetingHistory = ({ refreshTrigger }: { refreshTrigger: number }) =
               
               <div className="flex items-center justify-between border-t border-white/5 pt-3 mt-3">
                   <div className="flex gap-4 text-xs text-slate-500">
-                    {/* Formateo simple de fecha, ajusta según venga de tu DB */}
                     <span className="flex items-center gap-1">
                         <Calendar size={12}/> 
                         {new Date(acta.created_at).toLocaleDateString()}
@@ -97,7 +129,9 @@ export const MeetingHistory = ({ refreshTrigger }: { refreshTrigger: number }) =
                     </span>
                   </div>
                   
+                  {/* BOTÓN DE DESCARGA CONECTADO */}
                   <button 
+                    onClick={() => descargarActa(acta)}
                     className="text-blue-400 hover:text-blue-300 transition-colors"
                     title="Descargar acta"
                     aria-label="Descargar acta"

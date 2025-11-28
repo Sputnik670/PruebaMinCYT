@@ -1,11 +1,13 @@
 // src/services/geminiService.ts
 
-// Usamos la variable de entorno para producción o localhost para desarrollo
-const API_URL = import.meta.env.VITE_BACKEND_URL || "http://localhost:8000";
+// Configuración robusta: Elimina barras extra o '/api' al final para evitar errores de ruta
+const rawUrl = import.meta.env.VITE_BACKEND_URL || "http://localhost:8000";
+const API_URL = rawUrl.replace(/\/api\/?$/, "").replace(/\/$/, "");
 
 // --- FUNCIÓN 1: CHAT DE TEXTO ---
 export const sendMessageToGemini = async (message: string) => {
   try {
+    // Nota: Mantenemos /api/chat porque así lo definiste en main.py
     const response = await fetch(`${API_URL}/api/chat`, {
       method: 'POST',
       headers: {
@@ -27,24 +29,29 @@ export const sendMessageToGemini = async (message: string) => {
 };
 
 // --- FUNCIÓN 2: ENVIAR AUDIO (VOZ) ---
+// [CORREGIDA PARA COINCIDIR CON EL BACKEND]
 export const sendAudioToGemini = async (audioBlob: Blob) => {
   const formData = new FormData();
-  // Es importante ponerle nombre y extensión al archivo
-  formData.append('file', audioBlob, 'recording.webm'); 
+  formData.append('file', audioBlob, 'recording.webm');
 
   try {
-    const response = await fetch(`${API_URL}/api/voice`, {
+    console.log(`Enviando audio a: ${API_URL}/upload-audio/`);
+    
+    // CAMBIO AQUÍ: Apuntamos a /upload-audio/ en lugar de /api/voice
+    const response = await fetch(`${API_URL}/upload-audio/`, {
       method: 'POST',
       body: formData,
     });
 
     if (!response.ok) {
-      const errorData = await response.json();
+      const errorData = await response.json().catch(() => ({}));
       throw new Error(errorData.detail || `Error de audio: ${response.status}`);
     }
 
     const data = await response.json();
-    return data.text; // Retorna la transcripción
+    // CAMBIO AQUÍ: El backend nuevo devuelve "transcripcion", no "text"
+    return data.transcripcion || "Transcripción no disponible."; 
+    
   } catch (error) {
     console.error("Error enviando audio:", error);
     throw error;
@@ -54,21 +61,22 @@ export const sendAudioToGemini = async (audioBlob: Blob) => {
 // --- FUNCIÓN 3: SUBIR PDF ---
 export const uploadFile = async (file: File) => {
   const formData = new FormData();
-  formData.append('file', file); 
+  formData.append('file', file);
 
   try {
+    // Nota: Mantenemos /api/upload
     const response = await fetch(`${API_URL}/api/upload`, {
       method: 'POST',
       body: formData,
     });
 
     if (!response.ok) {
-      const errorData = await response.json();
+      const errorData = await response.json().catch(() => ({}));
       throw new Error(errorData.detail || `Error al subir: ${response.status}`);
     }
 
     const data = await response.json();
-    return data.message; 
+    return data.message;
   } catch (error) {
     console.error("Error subiendo archivo:", error);
     throw error;
