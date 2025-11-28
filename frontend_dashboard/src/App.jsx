@@ -1,4 +1,9 @@
 import React, { useState, useEffect } from 'react';
+// src/App.jsx (VERSIÓN INTEGRADA)
+
+import { useState, useEffect } from 'react';
+import './App.css';
+// --- NUEVO IMPORT PARA EL CHATBOT ---
 import { ChatInterface } from './components/ChatInterface'; 
 import { MeetingRecorder } from './components/MeetingRecorder';
 import { MeetingHistory } from './components/MeetingHistory'; 
