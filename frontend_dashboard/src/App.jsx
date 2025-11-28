@@ -6,10 +6,15 @@ import { MeetingRecorder } from './components/MeetingRecorder';
 import { MeetingHistory } from './components/MeetingHistory'; 
 import { LayoutDashboard, RefreshCw, Eye, EyeOff, Bot, FileAudio } from 'lucide-react';
 
-// URL del Backend
-let rawUrl = import.meta.env.VITE_BACKEND_URL || "http://localhost:8000";
-const API_URL = rawUrl.replace(/\/api$/, "").replace(/\/$/, "");
-console.log("URL FINAL DEL BACKEND:", API_URL); // Para ver en consola
+// --- CONFIGURACIÓN DE LA URL DEL BACKEND (CORREGIDA) ---
+// Paso 1: Obtener la variable de entorno o usar localhost por defecto
+const rawUrl = import.meta.env.VITE_BACKEND_URL || "http://localhost:8000";
+
+// Paso 2: Limpiar la URL para evitar dobles barras o dobles '/api'
+// Si la URL termina en '/api' o '/', se lo quitamos para tener una base limpia.
+const API_URL = rawUrl.replace(/\/api\/?$/, "").replace(/\/$/, "");
+
+console.log("Conectando a backend en:", API_URL); // Log para verificar en consola
 
 function App() {
   const [data, setData] = useState([]);
@@ -18,10 +23,11 @@ function App() {
   const [activeTab, setActiveTab] = useState('recorder'); 
 
   const cargarDatos = () => {
+    // Ahora es seguro agregar '/api/data' porque API_URL está limpia
     fetch(`${API_URL}/api/data`)
       .then(res => res.json())
       .then(datos => { if (Array.isArray(datos)) setData(datos); })
-      .catch(console.error);
+      .catch(error => console.error("Error cargando datos:", error));
   };
 
   useEffect(() => { cargarDatos(); }, []);
@@ -35,7 +41,7 @@ function App() {
   const columnas = data.length > 0 ? Object.keys(data[0]) : [];
 
   return (
-    <div className="max-w-[1600px] mx-auto p-4 md:p-8 min-h-screen">
+    <div className="max-w-[1600px] mx-auto p-4 md:p-8 min-h-screen text-slate-300">
       
       {/* --- HEADER --- */}
       <header className="flex flex-col md:flex-row justify-between items-end mb-8 pb-6 border-b border-white/10 gap-4">

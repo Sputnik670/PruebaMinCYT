@@ -1,52 +1,26 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
-
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
-:root {
-  font-family: 'Inter', sans-serif;
-  color-scheme: dark;
-}
-
+/* FONDO OSCURO GLOBAL */
 body {
-  background-color: #0f172a; /* Slate 950 base */
-  /* Degradados de fondo para dar profundidad */
-  background-image: 
-    radial-gradient(circle at 15% 50%, rgba(56, 189, 248, 0.08) 0%, transparent 50%),
-    radial-gradient(circle at 85% 30%, rgba(99, 102, 241, 0.08) 0%, transparent 50%);
-  background-attachment: fixed;
+  background-color: #0f172a; /* Slate 900 */
   color: #e2e8f0; /* Slate 200 */
   margin: 0;
   min-height: 100vh;
-  overflow-x: hidden; 
 }
 
-/* Scrollbar personalizada elegante */
-::-webkit-scrollbar {
+/* Barra de scroll personalizada para las actas */
+.custom-scrollbar::-webkit-scrollbar {
   width: 6px;
 }
-::-webkit-scrollbar-track {
-  background: transparent;
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.02);
 }
-::-webkit-scrollbar-thumb {
-  background: #334155;
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
   border-radius: 10px;
 }
-::-webkit-scrollbar-thumb:hover {
-  background: #475569;
-}
-
-/* Utilidad para ocultar scrollbar pero permitir scroll */
-.scrollbar-hide::-webkit-scrollbar {
-    display: none;
-}
-.scrollbar-hide {
-    -ms-overflow-style: none;
-    scrollbar-width: none;
-}
-
-/* Clases personalizadas para inputs glassmorphism */
-.glass-input {
-  @apply bg-black/20 border border-white/10 rounded-xl text-slate-200 placeholder:text-slate-600 focus:ring-2 focus:ring-blue-500/50 focus:border-transparent outline-none transition-all;
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.2);
 }
