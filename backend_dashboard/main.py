@@ -1,10 +1,6 @@
 import os
 import logging
 from dotenv import load_dotenv
-
-# Cargar variables de entorno
-load_dotenv()
-
 from fastapi import FastAPI, HTTPException, UploadFile, File 
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -14,8 +10,10 @@ from agents.main_agent import get_agent_response
 from tools.dashboard import obtener_datos_raw
 from tools.docs import procesar_pdf_subido
 from tools.audio import procesar_audio_gemini
-# Importamos las funciones de base de datos
 from tools.database import guardar_acta, obtener_historial_actas, borrar_acta
+
+# Cargar variables de entorno
+load_dotenv()
 
 # Configuración de Logging
 logging.basicConfig(
@@ -26,21 +24,16 @@ logger = logging.getLogger("backend_main")
 
 app = FastAPI()
 
-# --- SEGURIDAD CORS ---
-origenes_permitidos = [
-    "http://localhost:5173", # Vite default
-    "http://localhost:3000", # React default
-    "https://https://www.pruebasmincyt.ar",  # Tu dominio real
-]
-
+# --- SEGURIDAD CORS CORREGIDA ---
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "http://localhost:5173",             # Tu local
-        "http://localhost:3000",             # Por si acaso
-        "https://pruebasmincyt.ar",          # Tu dominio sin www
-        "https://www.pruebasmincyt.ar",      # Tu dominio CON www (MUY IMPORTANTE)
-        "*"                                  # Comodín temporal (opcional, pero ayuda a debuggear)
+        "http://localhost:5173", 
+        "http://localhost:3000",
+        "https://pruebasmincyt.ar",
+        "https://www.pruebasmincyt.ar",
+        "https://pruebamincyt-sputnik670s-projects.vercel.app", # <--- TU URL VERCEL SIN BARRA FINAL
+        "*" # Comodín temporal (puedes quitarlo cuando confirmes que funciona)
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -100,10 +93,8 @@ async def voice_endpoint(file: UploadFile = File(...)):
          raise HTTPException(status_code=400, detail="El archivo debe ser audio")
     
     try:
-        # 1. Transcribir con Gemini
         texto_transcrito = procesar_audio_gemini(file)
         
-        # 2. Guardar en Supabase automáticamente
         if texto_transcrito:
             print(f"💾 Intentando guardar acta...")
             guardar_acta(transcripcion=texto_transcrito, resumen="Pendiente de análisis")
@@ -117,7 +108,6 @@ async def voice_endpoint(file: UploadFile = File(...)):
 # --- ENDPOINTS DE HISTORIAL (MEETINGS) ---
 @app.get("/api/meetings")
 def get_meetings():
-    """Devuelve la lista de reuniones guardadas"""
     try:
         history = obtener_historial_actas()
         return history
@@ -127,7 +117,6 @@ def get_meetings():
 
 @app.delete("/api/meetings/{meeting_id}")
 def delete_meeting(meeting_id: int):
-    """Borra una reunión específica"""
     try:
         exito = borrar_acta(meeting_id)
         if exito:

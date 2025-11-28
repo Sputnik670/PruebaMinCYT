@@ -1,8 +1,12 @@
 {
-  "dependencies": {
-    "@google/generative-ai": "^0.24.1",
-    "clsx": "^2.1.1",
-    "lucide-react": "^0.554.0",
-    "tailwind-merge": "^3.4.0"
+  "name": "prueba-mincyt-root",
+  "private": true,
+  "scripts": {
+    "install-all": "npm install && cd frontend_dashboard && npm install",
+    "dev:frontend": "cd frontend_dashboard && npm run dev",
+    "dev:backend": "cd backend_dashboard && uvicorn main:app --reload"
+  },
+  "engines": {
+    "node": ">=18.0.0"
   }
 }
