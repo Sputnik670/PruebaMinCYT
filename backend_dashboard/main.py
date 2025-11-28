@@ -30,13 +30,18 @@ app = FastAPI()
 origenes_permitidos = [
     "http://localhost:5173", # Vite default
     "http://localhost:3000", # React default
-    "https://tudominio.ar",  # Tu dominio real
+    "https://https://www.pruebasmincyt.ar",  # Tu dominio real
 ]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origenes_permitidos, 
-    allow_origin_regex=r"https://.*\.vercel\.app", 
+    allow_origins=[
+        "http://localhost:5173",             # Tu local
+        "http://localhost:3000",             # Por si acaso
+        "https://pruebasmincyt.ar",          # Tu dominio sin www
+        "https://www.pruebasmincyt.ar",      # Tu dominio CON www (MUY IMPORTANTE)
+        "*"                                  # Comodín temporal (opcional, pero ayuda a debuggear)
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
