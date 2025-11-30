@@ -29,7 +29,7 @@ app = FastAPI(title="MinCYT AI Dashboard", version="1.2.0")
 origins = [
     "http://localhost:5173",  # Tu entorno local
     "http://127.0.0.1:5173",  # Alternativa local
-    "https://pruebamincyt.vercel.app/", # <--- ¡OJO! Aquí pon la URL real de tu frontend en Render/Vercel
+    "https://backend-mincyt.onrender.com", # <--- ¡OJO! Aquí pon la URL real de tu frontend en Render/Vercel
     
 ]
 
