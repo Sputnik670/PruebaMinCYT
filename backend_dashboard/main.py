@@ -41,7 +41,7 @@ origins = [
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins, 
+    allow_origins=["*"],  # 👈 ¡ESTO ES LA CLAVE! El asterisco permite cualquier origen.
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
