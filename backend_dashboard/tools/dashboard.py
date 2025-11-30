@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 SHEET_MINISTERIO_ID = "1lkViCdCeq7F4yEHVdbjfrV-G7KvKP6TZfxsOc-Ov4xI"
 WORKSHEET_MINISTERIO_GID = 563858184
 
-SHEET_CLIENTE_ID = "1HOiSJ-Hugkddv-kwGax6vhSV9tzthkiz" 
+SHEET_CLIENTE_ID = "1uAIwNTIXF0HSP2h5owe0G-XS3lL43ZFITzD7Ekl-lBU" 
 WORKSHEET_CLIENTE_GID = None 
 
 def autenticar_google_sheets():
