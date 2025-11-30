@@ -5,13 +5,14 @@ from langchain_core.prompts import ChatPromptTemplate
 
 # Imports de herramientas
 from tools.general import get_search_tool
-from tools.dashboard import consultar_calendario
 from tools.email import crear_borrador_email
-# from tools.docs import consultar_documento # (Opcional: Ya no es estrictamente necesaria si usamos la biblioteca)
 
-# IMPORTANTE: Importamos las herramientas de memoria (Actas y Biblioteca)
-# Asegúrate de que estos nombres coincidan con los @tool en tools/database.py
+# IMPORTANTE: Importamos las herramientas de memoria y las NUEVAS de calendario
 from tools.database import consultar_actas_reuniones, consultar_biblioteca_documentos
+from tools.dashboard import (
+    consultar_calendario_ministerio, 
+    consultar_calendario_cliente
+)
 
 # 1. Configuración del Modelo
 llm = ChatGoogleGenerativeAI(
@@ -20,26 +21,28 @@ llm = ChatGoogleGenerativeAI(
     max_retries=2,
 )
 
-# 2. Prompt con instrucciones de Memoria y Biblioteca
-# Aquí le enseñamos a Pitu a distinguir entre "lo que se habló" (Actas) y "lo que está escrito" (Biblioteca)
+# 2. Prompt con instrucciones de Memoria, Biblioteca y DOBLE CALENDARIO
 prompt = ChatPromptTemplate.from_messages([
-    ("system", "Eres Pitu, el asistente experto del MinCYT. "
-               "Tienes acceso a dos fuentes de memoria principales: \n"
-               "1. **Memoria de Reuniones (Actas):** Usa la herramienta 'consultar_actas_reuniones' si el usuario pregunta 'qué se habló', 'qué decidimos', o sobre el historial de conversaciones pasadas.\n"
-               "2. **Biblioteca de Documentos (Archivos):** Usa la herramienta 'consultar_biblioteca_documentos' si el usuario busca datos específicos, presupuestos, cronogramas (ej: 2026), tablas o información técnica contenida en PDFs o Excels subidos.\n"
-               "IMPORTANTE: Cuando respondas usando la biblioteca, intenta citar el nombre del archivo de donde sacaste el dato."),
+    ("system", "Eres Pitu, el asistente experto del MinCYT. \n\n"
+               "**FUENTES DE INFORMACIÓN:**\n"
+               "1. **Agenda Ministerio (Pública):** Usa 'consultar_calendario_ministerio' para actos de gobierno, visitas oficiales o agenda del Ministro.\n"
+               "2. **Agenda Interna (Cliente):** Usa 'consultar_calendario_cliente' para reuniones de equipo, privados, o cuando el usuario diga 'mi agenda' o 'mis reuniones'.\n"
+               "3. **Memoria de Reuniones (Actas):** Usa 'consultar_actas_reuniones' si preguntan 'qué se habló' o 'qué decidimos' en el pasado.\n"
+               "4. **Biblioteca (Archivos):** Usa 'consultar_biblioteca_documentos' para datos técnicos, presupuestos o PDFs subidos.\n\n"
+               "**IMPORTANTE:** Si te preguntan por conflictos de horario, consulta AMBAS agendas antes de responder."
+    ),
     ("human", "{input}"),
     ("placeholder", "{agent_scratchpad}"),
 ])
 
-# 3. Lista de Herramientas
+# 3. Lista de Herramientas Actualizada
 tools = [
     get_search_tool(), 
-    consultar_calendario, 
+    consultar_calendario_ministerio, # <--- Ojo Izquierdo (Ministerio)
+    consultar_calendario_cliente,    # <--- Ojo Derecho (Cliente)
     crear_borrador_email, 
-    # consultar_documento, # Dejamos esta comentada/fuera por ahora para priorizar la biblioteca
-    consultar_actas_reuniones,      # <--- Busca en actas_reunion
-    consultar_biblioteca_documentos # <--- Busca en libreria_documentos (Vectores)
+    consultar_actas_reuniones,
+    consultar_biblioteca_documentos
 ]
 
 # 4. Crear Agente
@@ -48,7 +51,7 @@ agent_runnable = create_tool_calling_agent(llm, tools, prompt)
 agent = AgentExecutor(
     agent=agent_runnable,
     tools=tools,
-    verbose=True, # Esto te permitirá ver en la consola qué herramienta elige usar
+    verbose=True,
     max_iterations=10,
     max_execution_time=30,
     handle_parsing_errors=True
@@ -61,4 +64,4 @@ def get_agent_response(user_message: str):
         return response["output"]
     except Exception as e:
         print(f"❌ Error Agente: {str(e)}")
-        return "Lo siento, estoy teniendo problemas para acceder a mi biblioteca de documentos en este momento."
+        return "Lo siento, estoy teniendo problemas técnicos para procesar tu solicitud."

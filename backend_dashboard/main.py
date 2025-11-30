@@ -27,15 +27,15 @@ app = FastAPI(title="MinCYT AI Dashboard", version="1.2.0")
 
 # --- SEGURIDAD CORS ---
 origins = [
-    "http://localhost:5173",  # Tu entorno local
-    "http://127.0.0.1:5173",  # Alternativa local
-    "https://backend-mincyt.onrender.com", # <--- ¡OJO! Aquí pon la URL real de tu frontend en Render/Vercel
-    
+    "http://localhost:5173",                      # Tu entorno local (Vite)
+    "http://127.0.0.1:5173",                      # Tu entorno local (IP)
+    "https://pruebamincyt-git-main-sputnik670s-projects.vercel.app", # 👈 Tu Vercel estable
+    "https://www.pruebasmincyt.ar",               # 👈 Tu dominio propio (por si acaso)
 ]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins, 
+    allow_origins=origins,      # <--- Aquí aplicamos la lista segura
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
