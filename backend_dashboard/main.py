@@ -79,9 +79,10 @@ def get_dashboard_data():
 # --- RESTO DE ENDPOINTS (Upload, Audio, Actas) ---
 @app.post("/api/upload")
 def upload_file_endpoint(file: UploadFile = File(...)):
-    allowed_extensions = ('.pdf', '.xlsx', '.xls', '.csv')
+    # CORRECCIÓN: AÑADIDOS .docx y .txt a la lista de formatos permitidos
+    allowed_extensions = ('.pdf', '.xlsx', '.xls', '.csv', '.docx', '.txt')
     if not file.filename.lower().endswith(allowed_extensions):
-        raise HTTPException(status_code=400, detail="Formato no permitido")
+        raise HTTPException(status_code=400, detail="Formato no permitido. Solo PDF, Excel, Word, CSV o TXT.")
     try:
         exito, mensaje = procesar_archivo_subido(file)
         return {"status": "ok", "message": mensaje} if exito else HTTPException(500, detail=mensaje)
@@ -95,6 +96,9 @@ def upload_audio_endpoint(file: UploadFile = File(...)):
          raise HTTPException(status_code=400, detail="Debe ser audio")
     try:
         texto = procesar_audio_gemini(file)
+        # Nota: La llamada a guardar_acta aquí es redundante si ya está en tools/audio.py.
+        # Si ya lo hace audio.py (como parece), esta línea podría eliminarse para limpieza. 
+        # Pero por seguridad, la dejo si la lógica es necesaria en main.
         if texto: guardar_acta(transcripcion=texto, resumen=None)
         return {"mensaje": "Éxito", "transcripcion": texto}
     except Exception as e:
