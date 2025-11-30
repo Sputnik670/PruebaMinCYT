@@ -132,6 +132,7 @@ def consultar_calendario_cliente(consulta: str):
 # Legacy
 @tool
 def consultar_calendario(consulta: str):
+    """Consulta la agenda (función de compatibilidad)."""
     return consultar_calendario_ministerio(consulta)
 
 def obtener_datos_raw():
