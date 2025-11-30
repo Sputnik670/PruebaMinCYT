@@ -15,7 +15,6 @@ SHEET_MINISTERIO_ID = "1lkViCdCeq7F4yEHVdbjfrV-G7KvKP6TZfxsOc-Ov4xI"
 WORKSHEET_MINISTERIO_GID = 563858184
 
 # 2. Agenda Cliente / Interna (La nueva)
-# [ID INSERTADO]
 SHEET_CLIENTE_ID = "1HOiSJ-Hugkddv-kwGax6vhSV9tzthkiz" 
 WORKSHEET_CLIENTE_GID = None 
 
@@ -137,28 +136,67 @@ def consultar_calendario(consulta: str):
 
 def obtener_datos_raw():
     """
-    Función helper para el endpoint /api/data del frontend.
-    Combina la Agenda Ministerio y la Agenda Cliente en una sola lista.
+    Función helper para el endpoint /api/data.
+    Descarga, NORMALIZA INTELIGENTEMENTE y combina las dos agendas.
+    Crea una columna 'OTROS DATOS' para capturar información diferente entre hojas.
     """
     try:
-        # 1. Traemos los datos de ambas fuentes
-        datos_ministerio = obtener_datos_sheet(SHEET_MINISTERIO_ID, WORKSHEET_MINISTERIO_GID)
-        datos_cliente = obtener_datos_sheet(SHEET_CLIENTE_ID, WORKSHEET_CLIENTE_GID)
-
-        # 2. Etiquetamos cada fila para que sepas de dónde viene en la tabla
-        # (Agregamos una columna virtual llamada "ORIGEN")
-        for fila in datos_ministerio:
-            fila["ORIGEN"] = "🏛️ OFICIAL"
+        # --- Lógica de Normalización Flexible ---
+        def normalizar_fila(fila_cruda, origen_etiqueta):
+            # 1. Limpiar claves
+            f_lower = {k.lower().strip(): v for k, v in fila_cruda.items()}
             
-        for fila in datos_cliente:
-            fila["ORIGEN"] = "💼 CLIENTE"
+            # 2. Definir sinónimos para las columnas principales
+            keys_fecha = ["fecha", "dia", "date"]
+            keys_hora = ["hora", "horario", "time", "inicio"]
+            keys_evento = ["título", "titulo", "evento", "actividad", "reunión", "reunion", "tema", "asunto"]
+            keys_lugar = ["lugar", "ubicación", "ubicacion", "sala", "location", "donde"]
 
-        # 3. Juntamos todo en una sola lista
-        # Primero lo del cliente (para que salga arriba) y luego lo oficial
-        datos_combinados = datos_cliente + datos_ministerio
-        
-        return datos_combinados
+            # 3. Función para extraer el primer valor coincidente
+            def get_val(keys_list):
+                for k in keys_list:
+                    if k in f_lower and f_lower[k]: return f_lower[k]
+                return ""
+
+            fecha = get_val(keys_fecha)
+            hora = get_val(keys_hora)
+            evento = get_val(keys_evento) or "Sin título"
+            lugar = get_val(keys_lugar)
+
+            # 4. DETECTAR DATOS EXTRA (Cajón de sastre)
+            # Identificamos qué claves YA usamos para no repetirlas
+            todas_claves_usadas = keys_fecha + keys_hora + keys_evento + keys_lugar
+            
+            extras = []
+            for k, v in f_lower.items():
+                # Si la columna tiene datos y NO es una de las principales (y no es 'origen' ni vacía)
+                if k not in todas_claves_usadas and k != "origen" and v and str(v).strip():
+                    # Formato bonito: "Link: zoom.us..." o "Notas: Importante"
+                    extras.append(f"{k.title()}: {v}")
+            
+            # Unimos todo lo extra en un solo texto
+            otros_datos = " | ".join(extras)
+
+            # 5. Devolver la fila estándar para el Dashboard
+            return {
+                "FECHA": fecha,
+                "HORA": hora,
+                "EVENTO": evento,
+                "LUGAR": lugar,
+                "OTROS DATOS": otros_datos,  # <--- Aquí va toda la info diferente
+                "ORIGEN": origen_etiqueta
+            }
+
+        # --- Ejecución ---
+        raw_ministerio = obtener_datos_sheet(SHEET_MINISTERIO_ID, WORKSHEET_MINISTERIO_GID)
+        datos_ministerio = [normalizar_fila(r, "🏛️ OFICIAL") for r in raw_ministerio]
+
+        raw_cliente = obtener_datos_sheet(SHEET_CLIENTE_ID, WORKSHEET_CLIENTE_GID)
+        datos_cliente = [normalizar_fila(r, "💼 CLIENTE") for r in raw_cliente]
+
+        # Combinar (Cliente primero)
+        return datos_cliente + datos_ministerio
 
     except Exception as e:
-        logger.error(f"Error combinando datos para el dashboard: {e}")
+        logger.error(f"Error normalizando datos dashboard: {e}")
         return []
