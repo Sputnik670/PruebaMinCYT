@@ -57,15 +57,30 @@ def procesar_archivo_subido(file: UploadFile):
                 
         elif filename.lower().endswith((".xlsx", ".xls", ".csv")):
             try:
+                # ... (dentro del if de Excel/CSV) ...
                 if filename.lower().endswith(".csv"):
                     df = pd.read_csv(file_stream)
                 else:
                     df = pd.read_excel(file_stream)
                 
-                # Convertimos cada fila en texto legible
+                # --- MEJORA: LIMPIEZA DE FILAS VACÍAS ---
+                # 1. Eliminar filas donde TODO sea NaN/Nulo
+                df.dropna(how='all', inplace=True)
+                
+                # 2. Convertir a texto solo si hay contenido real
                 for _, row in df.iterrows():
-                    fila_texto = " | ".join([f"{col}: {val}" for col, val in row.items() if pd.notna(val)])
-                    texto_extraido += fila_texto + "\n"
+                    items_fila = []
+                    for col, val in row.items():
+                        # Convertimos a string y limpiamos espacios
+                        val_str = str(val).strip()
+                        
+                        # Filtramos valores inútiles como "nan", "FALSE", "None" o vacíos
+                        if pd.notna(val) and val_str and val_str.lower() not in ['nan', 'false', 'none', '']:
+                            items_fila.append(f"{col}: {val_str}")
+                    
+                    # Solo agregamos la fila si tiene al menos un dato válido
+                    if items_fila:
+                        texto_extraido += " | ".join(items_fila) + "\n"
             except Exception as e:
                 return False, f"Error leyendo Excel/CSV: {str(e)}"
         
