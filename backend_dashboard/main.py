@@ -7,8 +7,14 @@ from pydantic import BaseModel, Field
 
 # --- IMPORTS ACTUALIZADOS ---
 from agents.main_agent import get_agent_response
-from tools.dashboard import obtener_datos_raw
-# Corrección aquí: Importamos la nueva función genérica
+# Importamos las nuevas constantes y la función genérica
+from tools.dashboard import (
+    obtener_datos_sheet, 
+    SHEET_MINISTERIO_ID, 
+    WORKSHEET_MINISTERIO_GID,
+    SHEET_CLIENTE_ID,
+    WORKSHEET_CLIENTE_GID
+)
 from tools.docs import procesar_archivo_subido 
 from tools.audio import procesar_audio_gemini
 from tools.database import guardar_acta, obtener_historial_actas, borrar_acta
@@ -23,19 +29,19 @@ logging.basicConfig(
 )
 logger = logging.getLogger("backend_main")
 
-app = FastAPI(title="MinCYT AI Dashboard", version="1.2.0")
+app = FastAPI(title="MinCYT AI Dashboard", version="2.0.0")
 
 # --- SEGURIDAD CORS ---
 origins = [
-    "http://localhost:5173",                      # Tu entorno local (Vite)
-    "http://127.0.0.1:5173",                      # Tu entorno local (IP)
-    "https://pruebamincyt-git-main-sputnik670s-projects.vercel.app", # 👈 Tu Vercel estable
-    "https://www.pruebasmincyt.ar",               # 👈 Tu dominio propio (por si acaso)
+    "http://localhost:5173",  # Tu entorno local
+    "http://127.0.0.1:5173",  
+    "https://pruebamincyt.vercel.app", 
+    "https://pruebamincyt.onrender.com"
 ]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,      # <--- Aquí aplicamos la lista segura
+    allow_origins=origins, 
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -46,7 +52,7 @@ class ChatRequest(BaseModel):
 
 @app.get("/")
 def read_root():
-    return {"status": "online", "system": "MinCYT Dashboard & AI v1.2"}
+    return {"status": "online", "system": "MinCYT Dashboard & AI v2.0"}
 
 # --- 1. ENDPOINT DE CHAT ---
 @app.post("/api/chat")
@@ -58,34 +64,49 @@ def chat_endpoint(request: ChatRequest):
         logger.error(f"❌ Error en chat: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail="Error interno del asistente")
 
-# --- 2. ENDPOINT DE DATOS DASHBOARD ---
-@app.get("/api/data")
-def get_dashboard_data():
+# --- 2. ENDPOINTS DE AGENDA (DOBLE VÍA) ---
+
+@app.get("/api/agenda/ministerio")
+def get_agenda_ministerio():
+    """Devuelve la tabla oficial del ministerio"""
     try:
-        datos = obtener_datos_raw()
+        datos = obtener_datos_sheet(SHEET_MINISTERIO_ID, WORKSHEET_MINISTERIO_GID)
         return datos
     except Exception as e:
-        logger.error(f"Error datos: {e}")
-        raise HTTPException(status_code=500, detail="Error de base de datos")
+        logger.error(f"Error agenda ministerio: {e}")
+        raise HTTPException(status_code=500, detail="Error leyendo agenda oficial")
+
+@app.get("/api/agenda/cliente")
+def get_agenda_cliente():
+    """Devuelve la tabla privada del cliente"""
+    try:
+        if "PON_AQUI" in SHEET_CLIENTE_ID:
+             return [{"Error": "ID de hoja no configurado en backend"}]
+             
+        datos = obtener_datos_sheet(SHEET_CLIENTE_ID, WORKSHEET_CLIENTE_GID)
+        return datos
+    except Exception as e:
+        logger.error(f"Error agenda cliente: {e}")
+        raise HTTPException(status_code=500, detail="Error leyendo agenda cliente")
+
+# Mantenemos este endpoint legacy por compatibilidad
+@app.get("/api/data")
+def get_dashboard_data():
+    return get_agenda_ministerio()
 
 # --- 3. ENDPOINT DE SUBIDA (PDF + EXCEL) ---
 @app.post("/api/upload")
 def upload_file_endpoint(file: UploadFile = File(...)):
-    # Validamos extensiones permitidas
     allowed_extensions = ('.pdf', '.xlsx', '.xls', '.csv')
     if not file.filename.lower().endswith(allowed_extensions):
         raise HTTPException(status_code=400, detail="Solo se permiten archivos PDF, Excel o CSV")
     
     try:
-        # Llamamos a la nueva función de procesamiento inteligente
         exito, mensaje = procesar_archivo_subido(file)
-        
         if exito:
             return {"status": "ok", "message": mensaje}
         else:
-            # Si falló la lógica interna (ej. PDF corrupto) devolvemos error 500
             raise HTTPException(status_code=500, detail=mensaje)
-            
     except HTTPException as he:
         raise he
     except Exception as e:
@@ -95,22 +116,19 @@ def upload_file_endpoint(file: UploadFile = File(...)):
 # --- 4. ENDPOINT DE VOZ ---
 @app.post("/upload-audio/") 
 def upload_audio_endpoint(file: UploadFile = File(...)):
-    logger.info(f"Recibiendo audio: {file.filename}")
+    # logger.info(f"Recibiendo audio: {file.filename}") 
     if not file.content_type.startswith('audio/'):
          raise HTTPException(status_code=400, detail="El archivo debe ser audio")
     
     try:
         texto_transcrito = procesar_audio_gemini(file)
-        acta_guardada = None
+        # Guardado automático silencioso
         if texto_transcrito:
-            resultado_db = guardar_acta(transcripcion=texto_transcrito, resumen=None)
-            if resultado_db and len(resultado_db) > 0:
-                acta_guardada = resultado_db[0]
+            guardar_acta(transcripcion=texto_transcrito, resumen=None)
 
         return {
             "mensaje": "Procesamiento exitoso",
-            "transcripcion": texto_transcrito,
-            "acta": acta_guardada
+            "transcripcion": texto_transcrito
         }
     except Exception as e:
         logger.error(f"Error audio: {e}")
@@ -129,13 +147,8 @@ def get_actas():
 def delete_acta_endpoint(id_acta: int):
     try:
         exito = borrar_acta(id_acta)
-        if exito:
-            return {"status": "ok", "message": "Eliminado"}
+        if exito: return {"status": "ok", "message": "Eliminado"}
         raise HTTPException(status_code=404, detail="No encontrado")
     except Exception as e:
         logger.error(f"Error delete: {e}")
         raise HTTPException(status_code=500, detail="Error interno")
-
-print("\n" + "="*50)
-print("🚀 ¡SISTEMA v1.2 ACTUALIZADO! - LECTOR PDF/EXCEL ACTIVO")
-print("="*50 + "\n")

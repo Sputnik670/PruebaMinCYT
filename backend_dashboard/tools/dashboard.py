@@ -133,3 +133,10 @@ def consultar_calendario_cliente(consulta: str):
 @tool
 def consultar_calendario(consulta: str):
     return consultar_calendario_ministerio(consulta)
+
+def obtener_datos_raw():
+    """
+    Función helper para el endpoint /api/data del frontend.
+    Devuelve los datos de la hoja principal (Ministerio) por defecto.
+    """
+    return obtener_datos_sheet(SHEET_MINISTERIO_ID, WORKSHEET_MINISTERIO_GID)
