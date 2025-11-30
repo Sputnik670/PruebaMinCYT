@@ -1,69 +1,101 @@
 import os
-from langchain.tools import tool
-from langchain_community.document_loaders import PyPDFLoader
-from langchain_text_splitters import RecursiveCharacterTextSplitter
+import logging
+import pandas as pd
+from fastapi import UploadFile
+from supabase import create_client
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
-from langchain_community.vectorstores import FAISS
-import tempfile
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from pypdf import PdfReader # <--- CORRECCIÓN: Usamos pypdf (la librería moderna)
+import io
 
-# Variable global para almacenar la "memoria" del documento actual en RAM
-VECTORSTORE_ACTUAL = None
+# Configuración de logs
+logger = logging.getLogger(__name__)
 
-def procesar_pdf_subido(archivo_upload):
+# 1. Conexión a Supabase y Gemini
+url = os.environ.get("SUPABASE_URL")
+key = os.environ.get("SUPABASE_KEY")
+supabase = create_client(url, key)
+
+embeddings_model = GoogleGenerativeAIEmbeddings(
+    model="models/embedding-001", 
+    task_type="retrieval_document"
+)
+
+def procesar_archivo_subido(file: UploadFile):
     """
-    Recibe un archivo PDF, lo lee y crea un índice de búsqueda.
+    Función maestra: Recibe PDF o Excel, lo guarda en Storage y lo indexa en la BD Vectorial.
     """
-    global VECTORSTORE_ACTUAL
+    filename = file.filename
+    logger.info(f"Procesando archivo: {filename}")
+    
+    # Leemos el contenido del archivo en memoria
+    content = file.file.read()
+    file_stream = io.BytesIO(content) 
     
     try:
-        # 1. Guardar el PDF temporalmente
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
-            tmp_file.write(archivo_upload.file.read())
-            tmp_path = tmp_file.name
+        # A. Guardar el archivo físico en el Bucket "biblioteca_documentos"
+        # Nota: Si el bucket no existe o es privado, esto podría fallar, pero seguimos con el indexado.
+        try:
+            logger.info(f"Subiendo {filename} al Storage...")
+            supabase.storage.from_("biblioteca_documentos").upload(
+                path=filename,
+                file=content,
+                file_options={"content-type": file.content_type, "x-upsert": "true"}
+            )
+        except Exception as e:
+            logger.warning(f"Nota sobre Storage (no crítico): {e}")
 
-        # 2. Cargar y extraer texto
-        loader = PyPDFLoader(tmp_path)
-        docs = loader.load()
+        # B. Extraer Texto según el tipo
+        texto_extraido = ""
+        if filename.lower().endswith(".pdf"):
+            try:
+                reader = PdfReader(file_stream)
+                for page in reader.pages:
+                    texto_extraido += (page.extract_text() or "") + "\n"
+            except Exception as e:
+                return False, f"Error leyendo PDF corrupto o encriptado: {str(e)}"
+                
+        elif filename.lower().endswith((".xlsx", ".xls", ".csv")):
+            try:
+                if filename.lower().endswith(".csv"):
+                    df = pd.read_csv(file_stream)
+                else:
+                    df = pd.read_excel(file_stream)
+                
+                # Convertimos cada fila en texto legible
+                for _, row in df.iterrows():
+                    fila_texto = " | ".join([f"{col}: {val}" for col, val in row.items() if pd.notna(val)])
+                    texto_extraido += fila_texto + "\n"
+            except Exception as e:
+                return False, f"Error leyendo Excel/CSV: {str(e)}"
         
-        # 3. Dividir en fragmentos
-        text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=1000,
-            chunk_overlap=200
-        )
-        splits = text_splitter.split_documents(docs)
-        
-        # 4. Vectorizar (Embeddings)
-        embeddings = GoogleGenerativeAIEmbeddings(model="models/text-embedding-004")
-        
-        # 5. Crear el buscador
-        VECTORSTORE_ACTUAL = FAISS.from_documents(splits, embeddings)
-        
-        # Limpieza
-        os.remove(tmp_path)
-        return True, f"PDF procesado correctamente. {len(splits)} fragmentos indexados."
-        
-    except Exception as e:
-        return False, f"Error procesando PDF: {str(e)}"
+        else:
+            return False, "Formato no soportado. Por favor sube PDF, Excel (.xlsx) o CSV."
 
-@tool
-def consultar_documento(pregunta: str) -> str:
-    """
-    Útil para responder preguntas BASADAS en el documento PDF que el usuario acaba de subir.
-    Usa esta herramienta cuando el usuario pregunte sobre 'el archivo', 'el pdf', 'el documento' o 'el reglamento'.
-    """
-    global VECTORSTORE_ACTUAL
-    
-    if not VECTORSTORE_ACTUAL:
-        return "No hay ningún documento cargado actualmente. Pide al usuario que suba un PDF primero."
-    
-    try:
-        # Buscamos los 4 fragmentos más relevantes
-        retriever = VECTORSTORE_ACTUAL.as_retriever(search_kwargs={"k": 4})
-        docs = retriever.invoke(pregunta)
+        if not texto_extraido.strip():
+            return False, "El archivo parece estar vacío o no se pudo extraer texto legible."
+
+        # C. Dividir texto en trozos (Chunking)
+        text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
+        chunks = text_splitter.split_text(texto_extraido)
+
+        # D. Vectorizar y Guardar en Base de Datos
+        logger.info(f"Indexando {len(chunks)} fragmentos de {filename}...")
         
-        # Unimos los fragmentos
-        contexto = "\n\n".join([d.page_content for d in docs])
-        return f"Información encontrada en el documento:\n{contexto}"
+        registros = []
+        for chunk in chunks:
+            vector = embeddings_model.embed_query(chunk)
+            registros.append({
+                "content": chunk,
+                "metadata": {"source": filename, "type": file.content_type},
+                "embedding": vector
+            })
+            
+        # Insertar en lotes (Supabase)
+        supabase.table("libreria_documentos").insert(registros).execute()
         
+        return True, f"✅ Archivo '{filename}' procesado e indexado correctamente ({len(chunks)} partes)."
+
     except Exception as e:
-        return f"Error al consultar el documento: {str(e)}"
+        logger.error(f"Error crítico procesando archivo: {e}", exc_info=True)
+        return False, f"Error interno: {str(e)}"

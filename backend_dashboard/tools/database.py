@@ -2,80 +2,88 @@ import os
 from supabase import create_client, Client
 import logging
 from langchain_core.tools import tool
+from langchain_google_genai import GoogleGenerativeAIEmbeddings
 
 logger = logging.getLogger(__name__)
 
-# Conexión a Supabase usando Variables de Entorno
+# Configuración
 url: str = os.environ.get("SUPABASE_URL")
 key: str = os.environ.get("SUPABASE_KEY")
+supabase: Client = create_client(url, key)
 
-supabase: Client = None
+# Modelo de embeddings para convertir preguntas en vectores
+embeddings_model = GoogleGenerativeAIEmbeddings(
+    model="models/embedding-001", 
+    task_type="retrieval_query"
+)
 
-if url and key:
-    try:
-        supabase = create_client(url, key)
-        logger.info("✅ Conexión a Supabase exitosa (Producción)")
-    except Exception as e:
-        logger.error(f"❌ Error conectando a Supabase: {e}")
-
+# --- FUNCIONES DE ACTAS (Mantenemos lo que ya tenías) ---
 def guardar_acta(transcripcion: str, resumen: str = None):
-    """Guarda una nueva acta en la base de datos"""
-    if not supabase: return None
     try:
-        titulo_auto = "Reunión: " + transcripcion[:30] + "..."
-        data = {
-            "transcripcion": transcripcion,
-            "resumen_ia": resumen,
-            "titulo": titulo_auto
-        }
-        response = supabase.table("actas_reunion").insert(data).execute()
-        # En versiones nuevas de supabase-py, response.data es la lista insertada
-        return response.data
+        titulo = "Reunión: " + transcripcion[:30] + "..."
+        data = {"transcripcion": transcripcion, "resumen_ia": resumen, "titulo": titulo}
+        return supabase.table("actas_reunion").insert(data).execute().data
     except Exception as e:
-        logger.error(f"Error guardando: {e}")
+        logger.error(f"Error guardando acta: {e}")
         return None
 
 def obtener_historial_actas():
-    """Recupera las últimas actas para el dashboard"""
-    if not supabase: return []
     try:
-        response = supabase.table("actas_reunion").select("*").order("created_at", desc=True).limit(10).execute()
-        return response.data
+        return supabase.table("actas_reunion").select("*").order("created_at", desc=True).limit(10).execute().data
     except Exception as e:
-        logger.error(f"Error leyendo: {e}")
+        logger.error(f"Error leyendo actas: {e}")
         return []
 
 def borrar_acta(id_acta: int):
-    if not supabase: return False
     try:
-        response = supabase.table("actas_reunion").delete().eq("id", id_acta).execute()
-        return len(response.data) > 0
-    except Exception as e:
-        logger.error(f"Error borrando: {e}")
+        res = supabase.table("actas_reunion").delete().eq("id", id_acta).execute()
+        return len(res.data) > 0
+    except Exception:
         return False
 
-# --- HERRAMIENTA CRÍTICA PARA EL AGENTE ---
+# --- HERRAMIENTA 1: CONSULTAR ACTAS ---
 @tool
-def consultar_base_de_datos_actas(consulta: str):
+def consultar_actas_reuniones(query: str):
+    """Usa esto si preguntan 'qué se habló en la reunión', 'decisiones tomadas' o historial de audio."""
+    actas = obtener_historial_actas()
+    if not actas: return "No hay actas registradas."
+    texto = "--- HISTORIAL REUNIONES ---\n"
+    for a in actas:
+        texto += f"Fecha: {a.get('created_at', '')[:10]} | {a.get('titulo')}\nResumen: {a.get('transcripcion')[:500]}...\n\n"
+    return texto
+
+# --- HERRAMIENTA 2: CONSULTAR BIBLIOTECA (NUEVO CEREBRO) ---
+@tool
+def consultar_biblioteca_documentos(pregunta: str):
     """
-    ÚTIL para buscar información en actas de reuniones pasadas, decisiones o historial.
-    Retorna el contenido de las últimas reuniones registradas.
+    IMPPRESCINDIBLE: Usa esta herramienta cuando el usuario pregunte sobre información específica contenida
+    en archivos subidos, como presupuestos, cronogramas 2026, listas, excel o documentos PDF.
     """
     try:
-        if not supabase:
-            return "Error: No hay conexión con la base de datos de actas."
-
-        actas = obtener_historial_actas()
-        if not actas:
-            return "El sistema consultó la base de datos y NO encontró actas registradas."
+        # 1. Convertir la pregunta del usuario en números (vector)
+        vector_pregunta = embeddings_model.embed_query(pregunta)
         
-        texto = "--- MEMORIA DE REUNIONES (BASE DE DATOS) ---\n"
-        for acta in actas:
-            fecha = str(acta.get('created_at', '')).split('T')[0]
-            titulo = acta.get('titulo', 'Sin título')
-            contenido = acta.get('transcripcion', '')[:1500] # Aumentamos límite para mejor contexto
-            texto += f"ID: {acta.get('id')} | Fecha: {fecha} | Título: {titulo}\nContenido: {contenido}...\n\n"
+        # 2. Llamar a la función de búsqueda inteligente en Supabase (RPC)
+        response = supabase.rpc(
+            "buscar_documentos", 
+            {
+                "query_embedding": vector_pregunta,
+                "match_threshold": 0.7, # Nivel de similitud exigido
+                "match_count": 5        # Cuántos trozos de texto traer
+            }
+        ).execute()
+        
+        if not response.data:
+            return "Busqué en la biblioteca pero no encontré documentos relevantes para esa consulta."
             
-        return texto
+        # 3. Formatear la respuesta para Pitu
+        contexto = f"--- INFORMACIÓN ENCONTRADA EN DOCUMENTOS PARA: '{pregunta}' ---\n"
+        for doc in response.data:
+            archivo = doc.get('metadata', {}).get('source', 'Desconocido')
+            contenido = doc.get('content', '')
+            contexto += f"📄 Fuente: {archivo}\n...{contenido}...\n\n"
+            
+        return contexto
+
     except Exception as e:
-        return f"Error técnico consultando la base de datos: {str(e)}"
+        return f"Error consultando la biblioteca: {str(e)}"
