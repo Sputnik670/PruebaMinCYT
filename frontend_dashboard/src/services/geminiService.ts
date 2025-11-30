@@ -1,11 +1,24 @@
 // src/services/geminiService.ts
 
+// [NUEVA LÍNEA] Importamos el tipo Message
+import { Message } from '../types/types'; 
+
 // Configuración robusta: Elimina barras extra o '/api' al final para evitar errores de ruta
 const rawUrl = import.meta.env.VITE_BACKEND_URL || "http://localhost:8000";
 const API_URL = rawUrl.replace(/\/api\/?$/, "").replace(/\/$/, "");
 
 // --- FUNCIÓN 1: CHAT DE TEXTO ---
-export const sendMessageToGemini = async (message: string) => {
+// MODIFICACIÓN: ACEPTA 'history' como arreglo de Message
+export const sendMessageToGemini = async (message: string, history: Message[]) => {
+  
+  // [NUEVO] Serialización del historial para enviarlo como JSON
+  const serializedHistory = history.map(msg => ({
+    text: msg.text,
+    sender: msg.sender,
+    // Usamos toISOString para enviar la fecha como string serializable
+    timestamp: msg.timestamp.toISOString(), 
+  }));
+
   try {
     // Nota: Mantenemos /api/chat porque así lo definiste en main.py
     const response = await fetch(`${API_URL}/api/chat`, {
@@ -13,7 +26,8 @@ export const sendMessageToGemini = async (message: string) => {
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ message: message }),
+      // [MODIFICADO] Incluye el mensaje y el historial serializado
+      body: JSON.stringify({ message: message, history: serializedHistory }), 
     });
 
     if (!response.ok) {

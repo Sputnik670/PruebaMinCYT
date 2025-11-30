@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Message } from '../types/types';
-import { sendMessageToGemini, uploadFile, sendAudioToGemini } from '../services/geminiService'; // Importamos sendAudioToGemini
+import { sendMessageToGemini, uploadFile, sendAudioToGemini } from '../services/geminiService';
 import { MessageBubble } from './MessageBubble';
 import { Send, Loader2, Bot, Paperclip, FileText, Mic, Square } from 'lucide-react';
 
@@ -66,7 +66,6 @@ export const ChatInterface: React.FC = () => {
   const sendAudioToBackend = async (audioBlob: Blob) => {
     setIsLoading(true);
     try {
-      // Usamos el servicio centralizado en lugar del fetch hardcodeado
       const text = await sendAudioToGemini(audioBlob);
       
       if (text) {
@@ -100,11 +99,16 @@ export const ChatInterface: React.FC = () => {
       sender: 'user',
       timestamp: new Date(),
     };
+
+    // [MODIFICADO] Creamos el historial actualizado INCLUYENDO el mensaje actual
+    const currentHistory = [...messages, userMessage];
+
     setMessages(prev => [...prev, userMessage]);
     setIsLoading(true);
 
     try {
-      const responseText = await sendMessageToGemini(userText);
+      // [MODIFICADO] Pasamos el historial completo al servicio
+      const responseText = await sendMessageToGemini(userText, currentHistory);
       
       const botMessage: Message = {
         id: (Date.now() + 1).toString(),

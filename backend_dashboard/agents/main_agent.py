@@ -1,6 +1,7 @@
 import os
 from datetime import datetime
 import locale
+from typing import List, Dict, Any # <--- IMPORTANTE: Tipos necesarios para el historial
 
 # Intentamos configurar locale a español para la fecha; si falla, usamos el del sistema
 try:
@@ -34,6 +35,35 @@ llm = ChatGoogleGenerativeAI(
 # 2. Definir la fecha actual para contexto temporal
 fecha_actual = datetime.now().strftime("%A %d de %B de %Y")
 
+# --- NUEVA FUNCIÓN: Formateo de Historial ---
+def format_chat_history(history: List[Dict[str, Any]]) -> str:
+    """Convierte el historial JSON del frontend en texto plano para el contexto del LLM."""
+    if not history or len(history) <= 1:
+        return ""
+    
+    formatted = ["\n--- CONTEXTO PREVIO (MEMORIA) ---"]
+    
+    # Excluimos el último mensaje porque es el input actual que ya se pasa por separado
+    history_to_process = history[:-1] 
+
+    for msg in history_to_process:
+        role = "Usuario" if msg.get('sender') == 'user' else "Pitu (Asistente)"
+        text = msg.get('text', '')
+        
+        # Intentamos extraer hora del timestamp ISO para dar contexto temporal
+        time_str = ""
+        try:
+            ts = msg.get('timestamp')
+            if ts and len(ts) > 16:
+                time_str = f" ({ts[11:16]})" # Extrae HH:MM de ISO string
+        except:
+            pass
+            
+        formatted.append(f"{role}{time_str}: {text}")
+    
+    formatted.append("--- FIN MEMORIA ---\n")
+    return "\n".join(formatted)
+
 # 3. Prompt de "Ejecutivo de Alto Nivel" con el Analista de Datos Integrado
 system_instructions = f"""Eres Pitu, el Asistente Estratégico de Inteligencia del MinCYT.
 HOY ES: {fecha_actual}. Usa esta fecha como ancla para cualquier consulta de "hoy", "mañana" o "la próxima semana".
@@ -65,7 +95,7 @@ HERRAMIENTAS DISPONIBLES:
 """
 
 prompt = ChatPromptTemplate.from_messages([
-    ("system", system_instructions),
+    ("system", system_instructions + "\n{history}"), # <--- AQUÍ INYECTAMOS LA MEMORIA
     ("human", "{input}"),
     ("placeholder", "{agent_scratchpad}"),
 ])
@@ -88,14 +118,23 @@ agent = AgentExecutor(
     agent=agent_runnable,
     tools=tools,
     verbose=True,
-    max_iterations=10, # Damos un poco más de margen por si el analista de pandas necesita reintentar código
+    max_iterations=10, 
     handle_parsing_errors=True
 )
 
-def get_agent_response(user_message: str):
+# [MODIFICADO] Función actualizada para aceptar el historial
+def get_agent_response(user_message: str, chat_history: List[Dict[str, Any]] = []):
     try:
         print(f"🤖 Pitu Procesando ({fecha_actual}): {user_message}")
-        response = agent.invoke({"input": user_message})
+        
+        # 1. Convertir el historial crudo en texto para el prompt
+        history_text = format_chat_history(chat_history)
+        
+        # 2. Invocar al agente pasando tanto el input como el history
+        response = agent.invoke({
+            "input": user_message,
+            "history": history_text 
+        })
         return response["output"]
     except Exception as e:
         print(f"❌ Error Agente: {str(e)}")

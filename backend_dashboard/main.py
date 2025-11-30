@@ -4,11 +4,12 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, UploadFile, File 
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
+from typing import List, Optional # [NUEVO IMPORT]
 
 from agents.main_agent import get_agent_response
 from tools.dashboard import (
-    get_data_cliente_formatted,      # <--- NUEVO
-    get_data_ministerio_formatted,   # <--- NUEVO
+    get_data_cliente_formatted,
+    get_data_ministerio_formatted,
     obtener_datos_raw,
     SHEET_CLIENTE_ID
 )
@@ -35,8 +36,17 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# [NUEVO MODELO] Estructura para validar cada mensaje del historial
+class Message(BaseModel):
+    id: str
+    text: str
+    sender: str
+    timestamp: str 
+
+# [MODIFICADO] El request ahora acepta 'history' opcionalmente
 class ChatRequest(BaseModel):
     message: str = Field(..., min_length=1, max_length=4000)
+    history: Optional[List[Message]] = [] 
 
 @app.get("/")
 def read_root():
@@ -45,7 +55,8 @@ def read_root():
 @app.post("/api/chat")
 def chat_endpoint(request: ChatRequest):
     try:
-        respuesta = get_agent_response(request.message)
+        # [MODIFICADO] Pasamos el mensaje Y el historial al agente
+        respuesta = get_agent_response(request.message, request.history)
         return {"response": respuesta}
     except Exception as e:
         logger.error(f"❌ Error en chat: {str(e)}", exc_info=True)
