@@ -5,7 +5,7 @@ from fastapi import UploadFile
 from supabase import create_client
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from pypdf import PdfReader # <--- CORRECCIÓN: Usamos pypdf (la librería moderna)
+from pypdf import PdfReader 
 import io
 
 # Configuración de logs
@@ -24,6 +24,7 @@ embeddings_model = GoogleGenerativeAIEmbeddings(
 def procesar_archivo_subido(file: UploadFile):
     """
     Función maestra: Recibe PDF o Excel, lo guarda en Storage y lo indexa en la BD Vectorial.
+    Incluye limpieza automática de versiones anteriores del mismo archivo.
     """
     filename = file.filename
     logger.info(f"Procesando archivo: {filename}")
@@ -34,7 +35,6 @@ def procesar_archivo_subido(file: UploadFile):
     
     try:
         # A. Guardar el archivo físico en el Bucket "biblioteca_documentos"
-        # Nota: Si el bucket no existe o es privado, esto podría fallar, pero seguimos con el indexado.
         try:
             logger.info(f"Subiendo {filename} al Storage...")
             supabase.storage.from_("biblioteca_documentos").upload(
@@ -79,6 +79,17 @@ def procesar_archivo_subido(file: UploadFile):
         text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
         chunks = text_splitter.split_text(texto_extraido)
 
+        # --- PASO NUEVO: LIMPIEZA DE MEMORIA (SEGURIDAD ANTI-DUPLICADOS) ---
+        # Borramos vectores antiguos de este mismo archivo antes de guardar los nuevos
+        try:
+            logger.info(f"🧹 Limpiando memoria antigua para: {filename}")
+            # Intentamos borrar registros donde el metadata->source coincida con el filename
+            # Nota: .match() busca coincidencias exactas en columnas JSONB
+            supabase.table("libreria_documentos").delete().match({"metadata": {"source": filename}}).execute()
+        except Exception as e:
+            logger.warning(f"No se pudo limpiar memoria previa (normal si es el primer upload): {e}")
+        # --------------------------------------------------------------------
+
         # D. Vectorizar y Guardar en Base de Datos
         logger.info(f"Indexando {len(chunks)} fragmentos de {filename}...")
         
@@ -94,7 +105,7 @@ def procesar_archivo_subido(file: UploadFile):
         # Insertar en lotes (Supabase)
         supabase.table("libreria_documentos").insert(registros).execute()
         
-        return True, f"✅ Archivo '{filename}' procesado e indexado correctamente ({len(chunks)} partes)."
+        return True, f"✅ Archivo '{filename}' procesado, limpiado e indexado ({len(chunks)} partes)."
 
     except Exception as e:
         logger.error(f"Error crítico procesando archivo: {e}", exc_info=True)
