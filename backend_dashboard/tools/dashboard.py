@@ -138,6 +138,27 @@ def consultar_calendario(consulta: str):
 def obtener_datos_raw():
     """
     Función helper para el endpoint /api/data del frontend.
-    Devuelve los datos de la hoja principal (Ministerio) por defecto.
+    Combina la Agenda Ministerio y la Agenda Cliente en una sola lista.
     """
-    return obtener_datos_sheet(SHEET_MINISTERIO_ID, WORKSHEET_MINISTERIO_GID)
+    try:
+        # 1. Traemos los datos de ambas fuentes
+        datos_ministerio = obtener_datos_sheet(SHEET_MINISTERIO_ID, WORKSHEET_MINISTERIO_GID)
+        datos_cliente = obtener_datos_sheet(SHEET_CLIENTE_ID, WORKSHEET_CLIENTE_GID)
+
+        # 2. Etiquetamos cada fila para que sepas de dónde viene en la tabla
+        # (Agregamos una columna virtual llamada "ORIGEN")
+        for fila in datos_ministerio:
+            fila["ORIGEN"] = "🏛️ OFICIAL"
+            
+        for fila in datos_cliente:
+            fila["ORIGEN"] = "💼 CLIENTE"
+
+        # 3. Juntamos todo en una sola lista
+        # Primero lo del cliente (para que salga arriba) y luego lo oficial
+        datos_combinados = datos_cliente + datos_ministerio
+        
+        return datos_combinados
+
+    except Exception as e:
+        logger.error(f"Error combinando datos para el dashboard: {e}")
+        return []
