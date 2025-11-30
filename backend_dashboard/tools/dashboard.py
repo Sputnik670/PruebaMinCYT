@@ -94,14 +94,26 @@ def obtener_datos_sheet(spreadsheet_id: str, worksheet_gid: int = None):
 def procesar_fila_cliente(fila):
     """Normaliza solo las filas de la gestión interna"""
     f_map = {k.lower().strip(): v for k, v in fila.items()}
+    
+    # --- CORRECCIÓN: Búsqueda flexible de la columna Costo ---
+    costo_encontrado = "0"
+    for key, value in f_map.items():
+        # Busca palabras clave comunes si el nombre exacto falla
+        if any(palabra in key for palabra in ["costo", "precio", "valor", "monto", "importe", "presupuesto"]):
+            if value and str(value).strip(): # Si tiene valor
+                costo_encontrado = value
+                break
+
     return {
-        # "ORIGEN": "💼 GESTIÓN",  <-- Ya no es necesario si separamos las tablas visualmente
         "FECHA": f_map.get("fecha de salida viaje") or f_map.get("fecha", ""),
         "MOTIVO / EVENTO": f_map.get("motivo") or f_map.get("evento") or "Sin título",
         "LUGAR": f_map.get("lugar") or f_map.get("destino", ""),
         "INSTITUCIÓN": f_map.get("institución") or f_map.get("institucion", ""),
         "NOMBRE": f_map.get("nombre", ""),
-        "COSTO": f_map.get("costo del traslado", ""),
+        
+        # Usamos el valor encontrado dinámicamente
+        "COSTO": costo_encontrado, 
+        
         "EE": f_map.get("ee", ""),
         "ESTADO": f_map.get("estado", ""),
         "RENDICIÓN": f_map.get("rendición") or f_map.get("rendicion", ""),

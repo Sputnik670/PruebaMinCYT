@@ -1,27 +1,62 @@
 import pandas as pd
+import logging # Importamos logging
 from langchain_experimental.agents import create_pandas_dataframe_agent
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain.tools import tool
 from tools.dashboard import obtener_datos_sheet, SHEET_CLIENTE_ID, WORKSHEET_CLIENTE_GID, procesar_fila_cliente
 
-# Reutilizamos tu lógica de extracción de Google Sheets
+# Configurar logger
+logger = logging.getLogger(__name__)
+
 def get_dataframe_cliente():
     raw_data = obtener_datos_sheet(SHEET_CLIENTE_ID, WORKSHEET_CLIENTE_GID)
     if not raw_data:
+        logger.error("❌ No se obtuvieron datos crudos del Sheet")
         return pd.DataFrame()
     
-    # Procesamos y limpiamos (importante para que los números sean números)
     data_limpia = [procesar_fila_cliente(r) for r in raw_data]
     df = pd.DataFrame(data_limpia)
     
-    # CONVERSIÓN DE TIPOS (CRÍTICO PARA QUE PUEDA SUMAR)
-    # Limpiamos el signo $ y las comas para convertir a float
+    # --- CORRECCIÓN: Limpieza numérica robusta y Logging ---
     if 'COSTO' in df.columns:
-        df['COSTO'] = df['COSTO'].astype(str).str.replace(r'[$,.]', '', regex=True).replace('', '0')
-        df['COSTO'] = pd.to_numeric(df['COSTO'], errors='coerce').fillna(0)
-    
+        # 1. LOG DE DEBUG: Ver qué datos llegan crudos (mira esto en tu terminal)
+        logger.info(f"🔍 Muestra de datos COSTO crudos: {df['COSTO'].head(5).tolist()}")
+
+        def limpiar_moneda(valor):
+            if not valor: return 0
+            val_str = str(valor).strip()
+            # Eliminar símbolo de moneda y espacios
+            val_str = val_str.replace('$', '').replace('USD', '').strip()
+            
+            # Caso Argentina/Europa: 1.000,00 -> Eliminar punto, reemplazar coma por punto
+            # Pero cuidado si está en formato US: 1,000.00
+            
+            # Estrategia simple: dejar solo dígitos y el último separador decimal si existe
+            if ',' in val_str and '.' in val_str:
+                # Asumimos formato 1.000,00 (más común en Latam para sheets en español)
+                val_str = val_str.replace('.', '').replace(',', '.')
+            elif ',' in val_str:
+                # Solo comas (100,50 o 1,000) -> Asumimos decimal
+                val_str = val_str.replace(',', '.')
+            
+            # Eliminar cualquier otro caracter no numérico excepto el punto
+            val_str = ''.join(c for c in val_str if c.isdigit() or c == '.')
+            
+            try:
+                return float(val_str)
+            except ValueError:
+                return 0.0
+
+        # Aplicar la limpieza fila por fila
+        df['COSTO'] = df['COSTO'].apply(limpiar_moneda)
+        
+        # 2. LOG DE DEBUG: Ver datos después de limpiar
+        logger.info(f"✅ Muestra de datos COSTO limpios: {df['COSTO'].head(5).tolist()}")
+        logger.info(f"💰 Suma total verificada en Python: {df['COSTO'].sum()}")
+
     return df
 
+# ... (El resto de la función crear_agente_pandas y analista_de_datos_cliente queda igual)
 # Creamos el Agente de Pandas
 def crear_agente_pandas():
     df = get_dataframe_cliente()
