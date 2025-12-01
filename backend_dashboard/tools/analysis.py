@@ -66,7 +66,7 @@ def crear_agente_pandas():
         return None
 
     llm = ChatGoogleGenerativeAI(
-        model="gemini-1.5-flash-001", 
+        model="gemini-2.5-flash", 
         temperature=0, # Cero creatividad para matemáticas, máxima precisión
         max_retries=2
     )

@@ -30,9 +30,9 @@ from tools.analysis import analista_de_datos_cliente
 logger = logging.getLogger(__name__)
 
 # 1. Configuración del Modelo
-# CORRECCIÓN: Usamos el nombre correcto del modelo (gemini-1.5-flash-001)
+
 llm = ChatGoogleGenerativeAI(
-    model="gemini-1.5-flash-001",
+    model="gemini-2.5-flash",
     temperature=0, # Temperatura 0 para máxima precisión
     max_retries=2,
 )

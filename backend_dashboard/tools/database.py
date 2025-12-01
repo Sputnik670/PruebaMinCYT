@@ -20,7 +20,7 @@ embeddings_model = GoogleGenerativeAIEmbeddings(
 # --- NUEVO: LLM para "pensar" sinónimos antes de buscar ---
 # Usamos Flash por velocidad. Si prefieres potencia bruta, cambia a "gemini-1.5-pro"
 llm_reformulador = ChatGoogleGenerativeAI(
-    model="gemini-1.5-flash", 
+    model="gemini-2.5-flash", 
     temperature=0.3,
     max_retries=2
 )
