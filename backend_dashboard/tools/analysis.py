@@ -51,7 +51,7 @@ def get_dataframe_cliente():
         df['COSTO'] = df['COSTO'].apply(limpiar_moneda)
         
         logger.info(f"✅ Muestra de datos COSTO limpios: {df['COSTO'].head(5).tolist()}")
-        logger.info(f"💰 Suma total verificada en Python: {df['COSTO'].sum()}")
+        # logger.info(f"💰 Suma total verificada en Python: {df['COSTO'].sum()}")
 
     return df
 
@@ -61,10 +61,10 @@ def crear_agente_pandas():
     if df.empty:
         return None
 
-    # --- CAMBIO CLAVE: Usamos un modelo más potente para razonamiento lógico/matemático ---
-    # Gemini 1.5 Pro es superior generando código Pandas sin errores.
+    # --- CAMBIO CLAVE: Usamos 'gemini-1.5-flash' para evitar el error 404 ---
+    # Este modelo es muy capaz para análisis de datos y está disponible en la capa estándar.
     llm = ChatGoogleGenerativeAI(
-        model="gemini-1.5-pro", 
+        model="gemini-1.5-flash", 
         temperature=0,
         max_retries=2
     )
