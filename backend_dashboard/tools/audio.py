@@ -7,8 +7,8 @@ from pathlib import Path
 import google.generativeai as genai
 from fastapi import UploadFile, HTTPException
 
-# --- CAMBIO 1: Importamos la función de guardado desde database.py ---
-# Usamos try/except para manejar diferentes contextos de ejecución (script vs módulo)
+# Nota: El import de guardar_acta se mantiene por si se usa en otro contexto,
+# pero su llamada dentro de esta función se elimina para usar BackgroundTasks en main.py.
 try:
     from .database import guardar_acta
 except ImportError:
@@ -26,8 +26,8 @@ else:
 
 def procesar_audio_gemini(file: UploadFile) -> str:
     """
-    Recibe un archivo de audio, valida su integridad, lo transcribe con Gemini
-    y guarda el respaldo automáticamente en Supabase.
+    Recibe un archivo de audio, valida su integridad y lo transcribe con Gemini.
+    Ya NO guarda en Supabase; esa tarea se delega a BackgroundTasks en main.py.
     """
     tmp_path = None
     
@@ -76,23 +76,21 @@ def procesar_audio_gemini(file: UploadFile) -> str:
             )
 
             response = model.generate_content([prompt, audio_file])
-            texto_transcrito = response.text  # Guardamos el texto en una variable
+            texto_transcrito = response.text 
 
-            # --- CAMBIO 2: Guardar respaldo en Supabase ---
-            if texto_transcrito:
-                logger.info("💾 Respaldando acta en Supabase...")
-                try:
-                    # Llamamos a la función que importamos arriba
-                    guardar_acta(transcripcion=texto_transcrito) 
-                except Exception as db_error:
-                    # Si falla la base de datos, solo logueamos el error pero NO detenemos el proceso
-                    # para que el usuario al menos reciba su transcripción en pantalla.
-                    logger.error(f"⚠️ Alerta: No se pudo guardar en Supabase: {db_error}")
+            # NOTA: Se eliminó el bloque de guardado síncrono.
             
-            return texto_transcrito
+            return texto_transcrito # Solo devolvemos la transcripción
 
         finally:
-            # Limpieza de archivo local
+            # Limpieza de archivo local y de la API
+            if 'audio_file' in locals():
+                try:
+                    genai.delete_file(audio_file.name)
+                    logger.info(f"🗑️ Archivo temporal de Gemini eliminado: {audio_file.name}")
+                except Exception as e:
+                    logger.warning(f"No se pudo eliminar archivo de Gemini: {e}")
+                    
             if tmp_path and os.path.exists(tmp_path):
                 os.remove(tmp_path)
 
