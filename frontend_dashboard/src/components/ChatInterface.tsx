@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { Message } from '../types/types';
 import { sendMessageToGemini, uploadFile, sendAudioToGemini } from '../services/geminiService';
 import { MessageBubble } from './MessageBubble';
-import { Send, Loader2, Bot, Paperclip, FileText, Mic, Square } from 'lucide-react';
+import { Send, Loader2, Bot, Paperclip, FileText, Mic, Square, Trash2 } from 'lucide-react';
 
 export const ChatInterface: React.FC = () => {
   const [messages, setMessages] = useState<Message[]>([
@@ -17,10 +17,15 @@ export const ChatInterface: React.FC = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
+  const [sessionId, setSessionId] = useState<string | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+
+  // Configuración robusta de la URL
+  const rawUrl = import.meta.env.VITE_BACKEND_URL || "http://127.0.0.1:8000";
+  const API_URL = rawUrl.replace(/\/api\/?$/, "").replace(/\/$/, "");
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -29,6 +34,81 @@ export const ChatInterface: React.FC = () => {
   useEffect(() => {
     scrollToBottom();
   }, [messages, isLoading, isUploading]);
+
+  // --- LÓGICA DE MEMORIA (PERSISTENCIA FORZADA) ---
+  useEffect(() => {
+    // 1. Intentamos recuperar una sesión existente
+    let storedSession = localStorage.getItem('mincyt_chat_session_id');
+
+    // 2. Si NO existe, creamos una "local" inmediatamente para no perder el primer mensaje
+    if (!storedSession) {
+        storedSession = 'local-' + Date.now().toString();
+        localStorage.setItem('mincyt_chat_session_id', storedSession);
+    }
+
+    setSessionId(storedSession);
+
+    // 3. Solo intentamos cargar historial si es una sesión real (no local nueva)
+    // Esto evita llamadas 404 innecesarias al backend
+    if (!storedSession.startsWith('local-')) {
+        cargarHistorial(storedSession);
+    }
+  }, []);
+
+  const cargarHistorial = async (id: string) => {
+    try {
+      const response = await fetch(`${API_URL}/api/sesiones/${id}/historial`);
+      if (response.ok) {
+        const data = await response.json();
+        if (data.historial && data.historial.length > 0) {
+          const historialFormateado: Message[] = [];
+          
+          data.historial.forEach((msg: any) => {
+            if (msg.mensaje_usuario) {
+              historialFormateado.push({
+                id: `user-${msg.id}`,
+                text: msg.mensaje_usuario,
+                sender: 'user',
+                timestamp: new Date(msg.timestamp)
+              });
+            }
+            if (msg.respuesta_bot) {
+              historialFormateado.push({
+                id: `bot-${msg.id}`,
+                text: msg.respuesta_bot,
+                sender: 'bot',
+                timestamp: new Date(msg.timestamp)
+              });
+            }
+          });
+          
+          if (historialFormateado.length > 0) {
+             setMessages(historialFormateado);
+          }
+        }
+      }
+    } catch (error) {
+      console.error("Error cargando historial:", error);
+    }
+  };
+
+  const limpiarSesion = () => {
+    if(confirm("¿Deseas borrar el historial de esta conversación?")) {
+        localStorage.removeItem('mincyt_chat_session_id');
+        
+        // Generamos una nueva limpia inmediatamente
+        const newSession = 'local-' + Date.now().toString();
+        localStorage.setItem('mincyt_chat_session_id', newSession);
+        setSessionId(newSession);
+
+        setMessages([{
+            id: Date.now().toString(),
+            text: 'Conversación reiniciada. ¿En qué puedo ayudarte ahora?',
+            sender: 'bot',
+            timestamp: new Date()
+        }]);
+    }
+  };
 
   // --- LÓGICA DE AUDIO ---
   const handleMicClick = async () => {
@@ -67,11 +147,9 @@ export const ChatInterface: React.FC = () => {
     setIsLoading(true);
     try {
       const text = await sendAudioToGemini(audioBlob);
-      
       if (text) {
         setInputValue((prev) => (prev ? prev + ' ' : '') + text);
       }
-
     } catch (error) {
       console.error("Error enviando audio:", error);
       const errorMsg: Message = {
@@ -85,7 +163,6 @@ export const ChatInterface: React.FC = () => {
       setIsLoading(false);
     }
   };
-  // -----------------------
 
   // --- LÓGICA DE CHAT CON STREAMING ---
   const handleSendMessage = async () => {
@@ -101,52 +178,55 @@ export const ChatInterface: React.FC = () => {
       timestamp: new Date(),
     };
 
-    // Historial para enviar (sin el mensaje actual duplicado si la lógica de backend lo requiere, 
-    // pero aquí lo añadimos al estado local para verlo)
-    const currentHistory = [...messages, userMessage];
-
     setMessages(prev => [...prev, userMessage]);
     setIsLoading(true);
 
-    // Creamos un ID para el mensaje del bot que se va a ir llenando
     const botMsgId = (Date.now() + 1).toString();
-    
-    // Mensaje placeholder inicial
     const botMessagePlaceholder: Message = {
       id: botMsgId,
-      text: '', // Empieza vacío
+      text: '',
       sender: 'bot',
       timestamp: new Date(),
     };
     setMessages(prev => [...prev, botMessagePlaceholder]);
 
     try {
-      // Llamamos a la función de servicio con el callback de streaming
-      await sendMessageToGemini(userText, currentHistory, (chunk) => {
-        setMessages(prevMessages => {
-          return prevMessages.map(msg => {
-            if (msg.id === botMsgId) {
-              // Concatenamos el nuevo chunk al texto existente
-              return { ...msg, text: msg.text + chunk };
+      // Enviamos el mensaje junto con el ID DE SESIÓN ACTUAL
+      await sendMessageToGemini(
+        userText, 
+        messages, 
+        (chunk) => {
+            // Detector de cambio de sesión (cuando el backend confirma persistencia)
+            if (chunk.includes("SESSION_ID:")) {
+                const parts = chunk.split("SESSION_ID:");
+                if (parts[1]) {
+                    const newId = parts[1].trim();
+                    console.log("Sesión persistida en backend:", newId);
+                    setSessionId(newId);
+                    localStorage.setItem('mincyt_chat_session_id', newId);
+                }
+                if (parts[0]) {
+                    setMessages(prev => prev.map(msg => 
+                        msg.id === botMsgId ? { ...msg, text: msg.text + parts[0] } : msg
+                    ));
+                }
+            } else {
+                setMessages(prev => prev.map(msg => 
+                    msg.id === botMsgId ? { ...msg, text: msg.text + chunk } : msg
+                ));
             }
-            return msg;
-          });
-        });
-      });
+        },
+        sessionId // <--- AQUÍ ESTÁ LA CLAVE: Enviamos el ID al servicio
+      );
       
     } catch (error) {
       console.error("Error:", error);
-      // Si falla, actualizamos el mensaje placeholder con el error o añadimos uno nuevo
-      setMessages(prev => {
-        // Opción: reemplazar el mensaje vacío con el error
-        const newMsgs = prev.map(msg => {
+      setMessages(prev => prev.map(msg => {
             if (msg.id === botMsgId && msg.text === '') {
                 return { ...msg, text: "⚠️ Lo siento, tuve un problema de conexión. Por favor intenta de nuevo." };
             }
             return msg;
-        });
-        return newMsgs;
-      });
+        }));
     } finally {
       setIsLoading(false);
     }
@@ -209,14 +289,27 @@ export const ChatInterface: React.FC = () => {
   return (
     <div className="flex flex-col min-h-[600px] bg-slate-50 font-sans h-full">
       
-      <header className="bg-[#002f6c] text-white p-4 shadow-md flex items-center gap-3">
-        <div className="p-2 bg-white/10 rounded-full">
-            <Bot size={24} />
+      <header className="bg-[#002f6c] text-white p-4 shadow-md flex items-center justify-between">
+        <div className="flex items-center gap-3">
+            <div className="p-2 bg-white/10 rounded-full">
+                <Bot size={24} />
+            </div>
+            <div>
+                <h1 className="font-bold text-lg">MinCYT Asistente Virtual</h1>
+                <p className="text-xs text-blue-200">Ministerio de Ciencia, Tecnología e Innovación</p>
+            </div>
         </div>
-        <div>
-            <h1 className="font-bold text-lg">MinCYT Asistente Virtual</h1>
-            <p className="text-xs text-blue-200">Ministerio de Ciencia, Tecnología e Innovación</p>
-        </div>
+        
+        {/* Botón de Reiniciar Sesión */}
+        {sessionId && (
+            <button 
+                onClick={limpiarSesion}
+                className="text-white/70 hover:text-white text-xs flex items-center gap-1 bg-white/10 px-2 py-1 rounded transition-colors"
+                title="Borrar historial y empezar de nuevo"
+            >
+                <Trash2 size={12}/> Reiniciar
+            </button>
+        )}
       </header>
 
       <div className="flex-1 max-h-[calc(100vh-200px)] overflow-y-auto p-4 md:p-8 w-full max-w-4xl mx-auto scrollbar-hide">
@@ -224,7 +317,6 @@ export const ChatInterface: React.FC = () => {
           <MessageBubble key={msg.id} message={msg} />
         ))}
 
-        {/* Loader solo se muestra si NO hay un mensaje del bot escribiéndose (streaming) */}
         {(isLoading && messages[messages.length - 1]?.sender !== 'bot') && (
           <div className="flex justify-start w-full mb-6 animate-pulse">
             <div className="flex items-center gap-3">

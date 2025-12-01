@@ -1,176 +1,169 @@
 import pandas as pd
 import logging
+import re
+from datetime import datetime
 from langchain_experimental.agents import create_pandas_dataframe_agent
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain.tools import tool
-# Importamos la lógica de datos con caché
 from tools.dashboard import obtener_datos_sheet_cached, SHEET_CLIENTE_ID, WORKSHEET_CLIENTE_GID, procesar_fila_cliente
 
-# Configurar logger
 logger = logging.getLogger(__name__)
 
-def get_dataframe_cliente():
-    """
-    Obtiene los datos usando el CACHÉ, normaliza columnas y tipos de datos.
-    """
-    raw_data = obtener_datos_sheet_cached(SHEET_CLIENTE_ID, WORKSHEET_CLIENTE_GID)
+# --- CONFIGURACIÓN DE CAMBIO (COTIZACIÓN REFERENCIA) ---
+COTIZACION = {
+    "USD": 1200.0,
+    "EUR": 1300.0,
+    "ARS": 1.0
+}
+
+def normalizar_dinero(valor):
+    """Detecta moneda y convierte a ARS."""
+    if not valor: return 0.0
+    val_str = str(valor).strip().upper()
     
+    moneda = "ARS"
+    if any(s in val_str for s in ["USD", "U$S", "DOLAR", "DÓLAR", "US$"]):
+        moneda = "USD"
+    elif any(s in val_str for s in ["EUR", "EURO", "€"]):
+        moneda = "EUR"
+    
+    val_limpio = re.sub(r'[^\d.,-]', '', val_str)
+    if not val_limpio: return 0.0
+
+    last_comma = val_limpio.rfind(',')
+    last_point = val_limpio.rfind('.')
+
+    if last_comma > -1 and last_point > -1:
+        if last_comma > last_point: 
+            val_limpio = val_limpio.replace('.', '').replace(',', '.')
+        else:
+            val_limpio = val_limpio.replace(',', '')
+    elif last_comma > -1:
+        val_limpio = val_limpio.replace('.', '').replace(',', '.')
+    
+    try:
+        monto = float(val_limpio)
+    except ValueError:
+        return 0.0
+
+    return monto * COTIZACION.get(moneda, 1.0)
+
+def extraer_fecha_inteligente(valor):
+    """
+    Intenta rescatar una fecha válida de textos sucios como '09 al 12/12' o 'aprox nov 2025'.
+    Devuelve un objeto datetime o NaT.
+    """
+    if not valor: return pd.NaT
+    val_str = str(valor).strip()
+    
+    # 1. Intento directo estándar
+    try:
+        return pd.to_datetime(val_str, dayfirst=True)
+    except:
+        pass
+    
+    # 2. Búsqueda con Regex (Busca patrones dd/mm/aaaa o dd/mm)
+    # Busca algo como "12/12" o "12/12/2025"
+    match = re.search(r'(\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?)', val_str)
+    if match:
+        fecha_texto = match.group(1)
+        try:
+            # Si es solo "12/12", le agregamos el año actual para que no falle
+            if len(fecha_texto) <= 5: 
+                fecha_texto += f"/{datetime.now().year}"
+            return pd.to_datetime(fecha_texto, dayfirst=True)
+        except:
+            pass
+            
+    return pd.NaT
+
+def get_dataframe_cliente():
+    raw_data = obtener_datos_sheet_cached(SHEET_CLIENTE_ID, WORKSHEET_CLIENTE_GID)
     if not raw_data:
-        logger.error("❌ No se obtuvieron datos para el DataFrame.")
+        logger.error("❌ DataFrame vacío.")
         return pd.DataFrame()
     
-    # Procesar lista de diccionarios
     data_limpia = [procesar_fila_cliente(r) for r in raw_data]
     df = pd.DataFrame(data_limpia)
     
-    # 1. Limpieza de Moneda (COSTO)
+    # 1. Limpieza de Moneda
     if 'COSTO' in df.columns:
-        def limpiar_moneda(valor):
-            if not valor: return 0.0
-            val_str = str(valor).strip()
-            # Quitar símbolos
-            val_str = val_str.replace('$', '').replace('USD', '').replace('€', '').strip()
-            
-            # Detección de formato Europeo (1.000,50) vs US (1,000.50)
-            if ',' in val_str and '.' in val_str:
-                val_str = val_str.replace('.', '').replace(',', '.') # Asumimos formato AR/EU
-            elif ',' in val_str:
-                val_str = val_str.replace(',', '.') # Solo coma es decimal
-            
-            # Dejar solo números y punto
-            val_str = ''.join(c for c in val_str if c.isdigit() or c == '.')
-            
-            try:
-                return float(val_str)
-            except ValueError:
-                return 0.0
+        df['COSTO_ORIGINAL'] = df['COSTO']
+        df['COSTO'] = df['COSTO'].apply(normalizar_dinero)
 
-        df['COSTO'] = df['COSTO'].apply(limpiar_moneda)
-
-    # 2. Limpieza de Fechas (CRÍTICO PARA FILTROS TEMPORALES)
+    # 2. Limpieza de Fechas (NUEVO: Usando extractor inteligente)
     if 'FECHA' in df.columns:
-        # 'coerce' pone NaT si falla. 'dayfirst=True' es vital para fechas latinas (DD/MM/YYYY)
-        df['FECHA_DT'] = pd.to_datetime(df['FECHA'], errors='coerce', dayfirst=True)
+        df['FECHA_RAW'] = df['FECHA'] # Guardamos original para referencia
+        df['FECHA_DT'] = df['FECHA'].apply(extraer_fecha_inteligente)
         
-        # Creamos columnas auxiliares para facilitar el filtrado natural
+        # Rellenamos fechas inválidas para no perder datos en filtros (opcional, usa fecha hoy o null)
+        # df['FECHA_DT'].fillna(pd.Timestamp.now(), inplace=True) 
+        
         df['MES'] = df['FECHA_DT'].dt.month
         df['ANIO'] = df['FECHA_DT'].dt.year
-        df['DIA'] = df['FECHA_DT'].dt.day
 
     return df
 
 def crear_agente_pandas():
-    """Configura el agente de Pandas con Gemini Flash."""
     df = get_dataframe_cliente()
-    if df.empty:
-        return None
+    if df.empty: return None
 
-    llm = ChatGoogleGenerativeAI(
-        model="gemini-2.5-flash", 
-        temperature=0, # Cero creatividad para matemáticas, máxima precisión
-        max_retries=2
-    )
+    llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0)
     
-    # --- FUNCIÓN DE RECUPERACIÓN DE ERRORES ---
-    def handle_parsing_error(error):
-        """
-        Si el LLM responde bien pero el parser de LangChain falla (OutputParserException),
-        esta función intenta extraer la respuesta final del mensaje de error.
-        """
-        str_error = str(error)
-        response_key = "Could not parse LLM output: `"
-        if response_key in str_error:
-            # Extraemos lo que está entre las comillas invertidas del error
-            return str_error.split(response_key)[-1].split("`")[0]
-        return f"Error procesando la respuesta: {str_error}"
-
-    # --- PROMPT DE INGENIERÍA DE DATOS (MEJORADO: AUDITABILIDAD) ---
-    prompt_prefix = """
-    Eres un Analista de Datos Senior del MinCYT. Trabajas con un DataFrame de Pandas `df`.
+    prompt_prefix = f"""
+    Eres un experto Financiero del MinCYT. Trabajas con un DataFrame `df`.
     
-    ESTRUCTURA DE DATOS:
-    - 'COSTO': Float. Para sumar dinero usa: df['COSTO'].sum().
-    - 'FECHA_DT': Datetime. Úsala para lógica temporal precisa.
-    - 'MES' (int), 'ANIO' (int): Úsalas para agrupar (ej: "Gastos de Noviembre" -> df[df['MES']==11]).
-    - 'MOTIVO / EVENTO': String. Contiene el nombre del evento.
-    - 'LUGAR': String. Destino o ubicación.
-    - 'EE': String. Expediente Electrónico (Clave para auditoría).
-
-    REGLAS DE OPERACIÓN OBLIGATORIAS (AUDITORÍA):
-    1. **Transparencia de Volumen:** SIEMPRE que des un resultado numérico (suma, promedio, conteo), debes decir cuántos registros (filas) usaste para el cálculo. 
-       - Mal: "El total es $50.000".
-       - Bien: "El total es $50.000 (calculado sobre 5 eventos en Córdoba)".
+    IMPORTANTE:
+    - La columna 'COSTO' ya está en PESOS ARGENTINOS (ARS). (1 USD = {COTIZACION['USD']} ARS).
+    - Para filtrar por fecha, usa 'MES' y 'ANIO'. (Ej: Noviembre 2025 -> MES=11, ANIO=2025).
+    - Si 'FECHA_DT' es NaT (Not a Time), esa fila tiene fecha inválida.
     
-    2. **Citas de Fuentes:** Si la respuesta involucra pocos registros (menos de 5), lista sus 'EE' o 'MOTIVO / EVENTO' para que el usuario pueda verificar.
-       - Ej: "...correspondientes a los eventos: 'Viaje A' y 'Congreso B'".
-
-    3. **Manejo de Ceros:** Si el filtro no devuelve nada o el costo es 0, aclara explícitamente: "No encontré registros con costo para ese criterio".
-
-    4. **Filtros de Texto:** Usa `str.contains(..., case=False, na=False)` para ser flexible con mayúsculas/minúsculas.
-    
-    IMPORTANTE: Tu respuesta final debe ser clara y directa.
+    TU MISIÓN:
+    1. Filtra los datos según lo que pida el usuario.
+    2. Suma la columna 'COSTO' de los datos filtrados.
+    3. Responde: "Encontré X eventos. El total es $Y pesos".
     """
 
     return create_pandas_dataframe_agent(
-        llm,
-        df,
-        verbose=True,
+        llm, 
+        df, 
+        verbose=True, 
         allow_dangerous_code=True,
-        # Usamos la función personalizada en lugar de solo True
-        handle_parsing_errors=handle_parsing_error,
-        return_intermediate_steps=True, # <--- CLAVE: Permite ver el razonamiento (código generado)
+        return_intermediate_steps=True,
         prefix=prompt_prefix,
-        # Refuerzo para el ejecutor del agente
-        agent_executor_kwargs={"handle_parsing_errors": handle_parsing_error}
+        handle_parsing_errors=True
     )
 
 @tool
 def analista_de_datos_cliente(consulta: str):
-    """
-    Agente de Análisis de Datos (Data Analyst).
-    Úsalo para: Cálculos matemáticos, Sumar costos, Contar eventos, Filtrar por fechas complejas 
-    (ej: "Gastos del mes pasado", "Promedio de costos en CABA").
-    Retorna el resultado Y los pasos lógicos realizados.
-    """
+    """Calculadora financiera para sumar costos y filtrar agenda."""
     try:
         agent = crear_agente_pandas()
-        if not agent:
-            return "Error: La base de datos interna está vacía o no disponible."
+        if not agent: return "Error: Sin datos."
         
-        logger.info(f"📊 Analista procesando: {consulta}")
-        
-        # Invocamos al agente
         response = agent.invoke({"input": consulta})
         
-        output_final = response.get("output", "")
+        output = response.get("output", "")
         pasos = response.get("intermediate_steps", [])
-
-        # --- MEJORA DE CALIDAD DE RESPUESTA ---
-        # Extraemos el "Pensamiento" (el código python que ejecutó) para darle contexto al Agente Principal
-        contexto_ejecucion = ""
-        if pasos:
-            contexto_ejecucion = "\n\n--- EVIDENCIA TÉCNICA (AUDITORÍA) ---\n"
-            for action, observation in steps_summary(pasos):
-                # Limpiamos un poco el código para que no sea tan ruidoso
-                codigo_limpio = action.replace("df = df.copy()", "").strip()
-                contexto_ejecucion += f"🔹 Operación: {codigo_limpio}\n🔸 Resultado: {observation}\n"
         
-        return f"{output_final}{contexto_ejecucion}"
+        debug_info = ""
+        if pasos:
+            debug_info = "\n\n--- CÁLCULO INTERNO ---\n"
+            for action, obs in pasos:
+                code = getattr(action, 'tool_input', str(action)).replace("df = df.copy()", "").strip()
+                debug_info += f"💻 {code}\n"
+
+        return f"{output}{debug_info}"
 
     except Exception as e:
-        logger.error(f"Error en analista: {e}", exc_info=True)
-        return f"Error técnico realizando el cálculo: {str(e)}"
+        logger.error(f"Error analista: {e}")
+        return f"Error de cálculo: {e}"
 
 def steps_summary(steps):
-    """Helper para formatear los pasos intermedios de forma limpia"""
     summary = []
     for action, observation in steps:
-        # Limpiamos el output de observación si es muy largo (ej: un dataframe entero)
         obs_str = str(observation)
-        if len(obs_str) > 300:
-            obs_str = obs_str[:300] + "... (truncado por longitud)"
-        
-        # action es un objeto AgentAction, action.tool_input suele ser el código python
+        if len(obs_str) > 300: obs_str = obs_str[:300] + "..."
         code = getattr(action, 'tool_input', str(action))
         summary.append((code, obs_str))
     return summary

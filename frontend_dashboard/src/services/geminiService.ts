@@ -10,10 +10,11 @@ const API_URL = rawUrl.replace(/\/api\/?$/, "").replace(/\/$/, "");
 export const sendMessageToGemini = async (
   message: string, 
   history: Message[], 
-  onStreamUpdate: (chunk: string) => void // Callback para ir enviando el texto
+  onStreamUpdate: (chunk: string) => void, // Callback para ir enviando el texto
+  sessionId?: string | null // <--- NUEVO: Recibimos el ID de sesión opcional
 ) => {
   
-  // Serialización correcta con ID
+  // Serialización correcta con ID para el historial visual
   const serializedHistory = history.map(msg => ({
     id: msg.id,
     text: msg.text,
@@ -27,7 +28,12 @@ export const sendMessageToGemini = async (
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ message: message, history: serializedHistory }), 
+      // <--- CAMBIO CLAVE: Enviamos session_id al backend
+      body: JSON.stringify({ 
+          message: message, 
+          history: serializedHistory,
+          session_id: sessionId || null 
+      }), 
     });
 
     if (!response.ok) {
@@ -49,8 +55,12 @@ export const sendMessageToGemini = async (
       
       if (value) {
         const chunk = decoder.decode(value, { stream: true });
-        // Enviamos el fragmento a la interfaz inmediatamente
-        onStreamUpdate(chunk); 
+        
+        // Limpiamos prefijos de protocolo si llegaran a colarse en el texto visible
+        // (Aunque ChatInterface ya maneja "data: SESSION_ID:", esto es por seguridad)
+        const cleanChunk = chunk.replace(/^data: /gm, "");
+        
+        onStreamUpdate(cleanChunk); 
       }
     }
     
