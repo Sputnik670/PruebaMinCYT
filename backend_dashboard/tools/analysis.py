@@ -9,16 +9,16 @@ from tools.dashboard import obtener_datos_sheet_cached, SHEET_CLIENTE_ID, WORKSH
 
 logger = logging.getLogger(__name__)
 
-# --- CONFIGURACIÓN DE CAMBIO (COTIZACIÓN REFERENCIA) ---
+# --- CONFIGURACIÓN DE CAMBIO ---
 COTIZACION = {
     "USD": 1200.0,
     "EUR": 1300.0,
     "ARS": 1.0
 }
 
-def normalizar_dinero(valor):
-    """Detecta moneda y convierte a ARS."""
-    if not valor: return 0.0
+def parse_money_value(valor):
+    """Extrae (Moneda, Monto)."""
+    if not valor: return "ARS", 0.0
     val_str = str(valor).strip().upper()
     
     moneda = "ARS"
@@ -28,7 +28,7 @@ def normalizar_dinero(valor):
         moneda = "EUR"
     
     val_limpio = re.sub(r'[^\d.,-]', '', val_str)
-    if not val_limpio: return 0.0
+    if not val_limpio: return moneda, 0.0
 
     last_comma = val_limpio.rfind(',')
     last_point = val_limpio.rfind('.')
@@ -44,61 +44,46 @@ def normalizar_dinero(valor):
     try:
         monto = float(val_limpio)
     except ValueError:
-        return 0.0
-
-    return monto * COTIZACION.get(moneda, 1.0)
+        monto = 0.0
+        
+    return moneda, monto
 
 def extraer_fecha_inteligente(valor):
-    """
-    Intenta rescatar una fecha válida de textos sucios como '09 al 12/12' o 'aprox nov 2025'.
-    Devuelve un objeto datetime o NaT.
-    """
     if not valor: return pd.NaT
     val_str = str(valor).strip()
-    
-    # 1. Intento directo estándar
     try:
         return pd.to_datetime(val_str, dayfirst=True)
     except:
         pass
-    
-    # 2. Búsqueda con Regex (Busca patrones dd/mm/aaaa o dd/mm)
-    # Busca algo como "12/12" o "12/12/2025"
     match = re.search(r'(\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?)', val_str)
     if match:
-        fecha_texto = match.group(1)
         try:
-            # Si es solo "12/12", le agregamos el año actual para que no falle
-            if len(fecha_texto) <= 5: 
-                fecha_texto += f"/{datetime.now().year}"
-            return pd.to_datetime(fecha_texto, dayfirst=True)
+            txt = match.group(1)
+            if len(txt) <= 5: txt += f"/{datetime.now().year}"
+            return pd.to_datetime(txt, dayfirst=True)
         except:
             pass
-            
     return pd.NaT
 
 def get_dataframe_cliente():
     raw_data = obtener_datos_sheet_cached(SHEET_CLIENTE_ID, WORKSHEET_CLIENTE_GID)
     if not raw_data:
-        logger.error("❌ DataFrame vacío.")
         return pd.DataFrame()
     
     data_limpia = [procesar_fila_cliente(r) for r in raw_data]
     df = pd.DataFrame(data_limpia)
     
-    # 1. Limpieza de Moneda
+    # Procesamiento de Moneda
     if 'COSTO' in df.columns:
-        df['COSTO_ORIGINAL'] = df['COSTO']
-        df['COSTO'] = df['COSTO'].apply(normalizar_dinero)
+        parsed = df['COSTO'].apply(parse_money_value)
+        df['MONEDA'] = parsed.apply(lambda x: x[0])
+        df['MONTO'] = parsed.apply(lambda x: x[1])
+        
+        # IMPORTANTE: No creamos columna de referencia en ARS para no confundir al agente.
 
-    # 2. Limpieza de Fechas (NUEVO: Usando extractor inteligente)
+    # Procesamiento de Fechas
     if 'FECHA' in df.columns:
-        df['FECHA_RAW'] = df['FECHA'] # Guardamos original para referencia
         df['FECHA_DT'] = df['FECHA'].apply(extraer_fecha_inteligente)
-        
-        # Rellenamos fechas inválidas para no perder datos en filtros (opcional, usa fecha hoy o null)
-        # df['FECHA_DT'].fillna(pd.Timestamp.now(), inplace=True) 
-        
         df['MES'] = df['FECHA_DT'].dt.month
         df['ANIO'] = df['FECHA_DT'].dt.year
 
@@ -110,18 +95,26 @@ def crear_agente_pandas():
 
     llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0)
     
-    prompt_prefix = f"""
-    Eres un experto Financiero del MinCYT. Trabajas con un DataFrame `df`.
+    # PROMPT DE INGENIERÍA DE DATOS
+    prompt_prefix = """
+    Eres un Analista de Costos Riguroso. Trabajas con un DataFrame `df`.
     
-    IMPORTANTE:
-    - La columna 'COSTO' ya está en PESOS ARGENTINOS (ARS). (1 USD = {COTIZACION['USD']} ARS).
-    - Para filtrar por fecha, usa 'MES' y 'ANIO'. (Ej: Noviembre 2025 -> MES=11, ANIO=2025).
-    - Si 'FECHA_DT' es NaT (Not a Time), esa fila tiene fecha inválida.
+    TU OBJETIVO: Calcular el costo total EXACTO agrupado por divisa.
     
-    TU MISIÓN:
-    1. Filtra los datos según lo que pida el usuario.
-    2. Suma la columna 'COSTO' de los datos filtrados.
-    3. Responde: "Encontré X eventos. El total es $Y pesos".
+    INSTRUCCIONES OBLIGATORIAS:
+    1. Filtra los datos según la consulta (mes, año, tema, etc.).
+    2. Agrupa los resultados por la columna 'MONEDA'.
+    3. Suma la columna 'MONTO' para cada moneda.
+    4. NO conviertas monedas. Reporta la suma de cada una por separado.
+    
+    EJEMPLO DE RESPUESTA CORRECTA:
+    "Para diciembre 2025 encontré 5 eventos. Los costos son:
+    - USD: 12,500.00
+    - EUR: 3,200.00
+    - ARS: 1,500,000.00"
+    
+    EJEMPLO INCORRECTO (NO HACER):
+    "El costo total es $30,000,000 pesos." (Prohibido sumar monedas distintas).
     """
 
     return create_pandas_dataframe_agent(
@@ -144,26 +137,16 @@ def analista_de_datos_cliente(consulta: str):
         response = agent.invoke({"input": consulta})
         
         output = response.get("output", "")
+        # Agregamos el código de debug para que el agente principal confíe
         pasos = response.get("intermediate_steps", [])
-        
-        debug_info = ""
+        debug_code = ""
         if pasos:
-            debug_info = "\n\n--- CÁLCULO INTERNO ---\n"
-            for action, obs in pasos:
-                code = getattr(action, 'tool_input', str(action)).replace("df = df.copy()", "").strip()
-                debug_info += f"💻 {code}\n"
+             for action, obs in pasos:
+                 if hasattr(action, 'tool_input'):
+                     debug_code += f"\n[Código generado]: {action.tool_input}\n"
 
-        return f"{output}{debug_info}"
+        return f"{output}\n{debug_code}" 
 
     except Exception as e:
         logger.error(f"Error analista: {e}")
         return f"Error de cálculo: {e}"
-
-def steps_summary(steps):
-    summary = []
-    for action, observation in steps:
-        obs_str = str(observation)
-        if len(obs_str) > 300: obs_str = obs_str[:300] + "..."
-        code = getattr(action, 'tool_input', str(action))
-        summary.append((code, obs_str))
-    return summary
