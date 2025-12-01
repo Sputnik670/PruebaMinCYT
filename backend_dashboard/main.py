@@ -18,7 +18,7 @@ from tools.dashboard import (
 from tools.docs import procesar_archivo_subido 
 from tools.audio import procesar_audio_gemini
 from tools.database import guardar_acta, obtener_historial_actas, borrar_acta
-from monitoring.session_manager import session_manager
+from monitoring import session_manager
 
 load_dotenv()
 
