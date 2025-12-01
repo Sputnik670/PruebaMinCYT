@@ -9,58 +9,87 @@ from tools.dashboard import obtener_datos_sheet_cached, SHEET_CLIENTE_ID, WORKSH
 
 logger = logging.getLogger(__name__)
 
-# ... (Mantén tus funciones parse_money_value y extraer_fecha_inteligente igual que antes) ...
-# Solo me aseguro de incluir parse_money_value aquí para referencia, pero usa la que ya tienes si funciona bien.
+# --- CONFIGURACIÓN DE CAMBIO ---
+COTIZACION = {
+    "USD": 1200.0,
+    "EUR": 1300.0,
+    "ARS": 1.0
+}
 
+# 1. FUNCIÓN DE LIMPIEZA DE MONEDA (parse_money_value)
 def parse_money_value(valor):
-    """Extrae (Moneda, Monto) limpiando símbolos."""
+    """Extrae (Moneda, Monto)."""
     if not valor: return "ARS", 0.0
     val_str = str(valor).strip().upper()
     
     moneda = "ARS"
-    if any(s in val_str for s in ["USD", "U$S", "DOLAR", "US$"]): moneda = "USD"
-    elif any(s in val_str for s in ["EUR", "EURO", "€"]): moneda = "EUR"
+    if any(s in val_str for s in ["USD", "U$S", "DOLAR", "DÓLAR", "US$"]):
+        moneda = "USD"
+    elif any(s in val_str for s in ["EUR", "EURO", "€"]):
+        moneda = "EUR"
     
-    # Limpieza agresiva para dejar solo numeros y punto/coma
     val_limpio = re.sub(r'[^\d.,-]', '', val_str)
     if not val_limpio: return moneda, 0.0
 
-    # Lógica para detectar decimales vs miles
-    if ',' in val_limpio and '.' in val_limpio:
-        if val_limpio.rfind(',') > val_limpio.rfind('.'): # Caso 1.000,50
+    last_comma = val_limpio.rfind(',')
+    last_point = val_limpio.rfind('.')
+
+    if last_comma > -1 and last_point > -1:
+        if last_comma > last_point: 
             val_limpio = val_limpio.replace('.', '').replace(',', '.')
-        else: # Caso 1,000.50
+        else:
             val_limpio = val_limpio.replace(',', '')
-    elif ',' in val_limpio: # Caso 500,50
-        val_limpio = val_limpio.replace(',', '.')
+    elif last_comma > -1:
+        val_limpio = val_limpio.replace('.', '').replace(',', '.')
     
     try:
         monto = float(val_limpio)
-    except:
+    except ValueError:
         monto = 0.0
+        
     return moneda, monto
 
-# ... extraer_fecha_inteligente se queda igual ...
-
+# 2. FUNCIÓN DE EXTRACCIÓN DE FECHA (extraer_fecha_inteligente) - CORREGIDA
+def extraer_fecha_inteligente(valor):
+    if not valor: return pd.NaT
+    val_str = str(valor).strip()
+    try:
+        return pd.to_datetime(val_str, dayfirst=True)
+    except:
+        pass
+    match = re.search(r'(\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?)', val_str)
+    if match:
+        try:
+            txt = match.group(1)
+            if len(txt) <= 5: txt += f"/{datetime.now().year}"
+            return pd.to_datetime(txt, dayfirst=True)
+        except:
+            pass
+    return pd.NaT
+    
+# 3. FUNCIÓN QUE CONSTRUYE EL DATAFRAME (get_dataframe_cliente)
 def get_dataframe_cliente():
     raw_data = obtener_datos_sheet_cached(SHEET_CLIENTE_ID, WORKSHEET_CLIENTE_GID)
-    if not raw_data: return pd.DataFrame()
+    if not raw_data:
+        return pd.DataFrame()
     
     data_limpia = [procesar_fila_cliente(r) for r in raw_data]
     df = pd.DataFrame(data_limpia)
     
-    # --- PRE-PROCESAMIENTO ROBUSTO ---
+    # Procesamiento de Moneda
     if 'COSTO' in df.columns:
         parsed = df['COSTO'].apply(parse_money_value)
         df['MONEDA'] = parsed.apply(lambda x: x[0])
         df['MONTO'] = parsed.apply(lambda x: x[1])
-        # Aseguramos que MONTO sea float para que el agente pueda sumar sin errores
+        
+        # Aseguramos que MONTO sea float para cálculos
         df['MONTO'] = df['MONTO'].astype(float)
 
+    # Procesamiento de Fechas
     if 'FECHA' in df.columns:
         df['FECHA_DT'] = df['FECHA'].apply(extraer_fecha_inteligente)
-        df['MES'] = df['FECHA_DT'].apply(lambda x: x.month if pd.notnull(x) else 0)
-        df['ANIO'] = df['FECHA_DT'].apply(lambda x: x.year if pd.notnull(x) else 0)
+        df['MES'] = df['FECHA_DT'].dt.month
+        df['ANIO'] = df['FECHA_DT'].dt.year
 
     return df
 
@@ -70,7 +99,7 @@ def crear_agente_pandas():
 
     llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0)
     
-    # --- PROMPT DE INGENIERÍA INVERSA PARA GARANTIZAR EL FORMATO ---
+    # PROMPT MEJORADO PARA FORZAR EL FORMATO Y LA LÓGICA
     prompt_prefix = """
     Estás trabajando con un DataFrame de Pandas 'df'.
     Estructura de columnas clave:
@@ -87,7 +116,7 @@ def crear_agente_pandas():
     3. Imprime el resultado del agrupamiento.
 
     FORMATO DE SALIDA ESTRICTO:
-    Debes responder EXACTAMENTE con este formato (reemplaza X e Y por los números):
+    Debes responder **EXACTAMENTE** con este formato (reemplaza X, Y, Z por los números):
     "el costo es = EURO: X Y DOLAR: Y Y PESOS: Z"
     
     Si una moneda es 0, no la incluyas.
@@ -99,6 +128,7 @@ def crear_agente_pandas():
         df, 
         verbose=True, 
         allow_dangerous_code=True,
+        return_intermediate_steps=True,
         prefix=prompt_prefix,
         handle_parsing_errors=True
     )
@@ -113,10 +143,11 @@ def analista_de_datos_cliente(consulta: str):
         agent = crear_agente_pandas()
         if not agent: return "Error: No hay datos disponibles en la planilla."
         
-        # Invocamos al agente
         response = agent.invoke({"input": consulta})
-        return response["output"]
+        
+        # Devolvemos solo el output final para el usuario.
+        return response.get("output", f"Error: El agente no pudo generar una respuesta para '{consulta}'.")
 
     except Exception as e:
         logger.error(f"Error analista: {e}")
-        return f"No pude realizar el cálculo debido a un error técnico: {e}"
+        return f"Error de cálculo: {e}"
