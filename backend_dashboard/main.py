@@ -4,7 +4,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, UploadFile, File 
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
-from typing import List, Optional # [NUEVO IMPORT]
+from typing import List, Optional
 
 from agents.main_agent import get_agent_response
 from tools.dashboard import (
@@ -19,6 +19,7 @@ from tools.database import guardar_acta, obtener_historial_actas, borrar_acta
 
 load_dotenv()
 
+# Configuración de Logging
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
@@ -27,6 +28,7 @@ logger = logging.getLogger("backend_main")
 
 app = FastAPI(title="MinCYT AI Dashboard", version="2.0.0")
 
+# Configuración CORS
 origins = ["*"]
 app.add_middleware(
     CORSMiddleware,
@@ -36,17 +38,19 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# [NUEVO MODELO] Estructura para validar cada mensaje del historial
+# --- MODELOS PYDANTIC ---
+
 class Message(BaseModel):
     id: str
     text: str
     sender: str
     timestamp: str 
 
-# [MODIFICADO] El request ahora acepta 'history' opcionalmente
 class ChatRequest(BaseModel):
     message: str = Field(..., min_length=1, max_length=4000)
     history: Optional[List[Message]] = [] 
+
+# --- ENDPOINTS GENERALES ---
 
 @app.get("/")
 def read_root():
@@ -55,14 +59,14 @@ def read_root():
 @app.post("/api/chat")
 def chat_endpoint(request: ChatRequest):
     try:
-        # [MODIFICADO] Pasamos el mensaje Y el historial al agente
+        # Pasamos el mensaje Y el historial al agente
         respuesta = get_agent_response(request.message, request.history)
         return {"response": respuesta}
     except Exception as e:
         logger.error(f"❌ Error en chat: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail="Error interno del asistente")
 
-# --- ENDPOINTS DE DATOS SEPARADOS ---
+# --- ENDPOINTS DE DATOS (AGENDA) ---
 
 @app.get("/api/agenda/ministerio")
 def get_agenda_ministerio_endpoint():
@@ -87,16 +91,22 @@ def get_dashboard_data():
     """Endpoint fallback (devuelve cliente por defecto)"""
     return get_data_cliente_formatted()
 
-# --- RESTO DE ENDPOINTS (Upload, Audio, Actas) ---
+# --- ENDPOINTS DE ARCHIVOS Y AUDIO ---
+
 @app.post("/api/upload")
 def upload_file_endpoint(file: UploadFile = File(...)):
-    # CORRECCIÓN: AÑADIDOS .docx y .txt a la lista de formatos permitidos
+    # Extensiones permitidas: PDF, Excel, CSV, Word, TXT
     allowed_extensions = ('.pdf', '.xlsx', '.xls', '.csv', '.docx', '.txt')
+    
     if not file.filename.lower().endswith(allowed_extensions):
         raise HTTPException(status_code=400, detail="Formato no permitido. Solo PDF, Excel, Word, CSV o TXT.")
+    
     try:
         exito, mensaje = procesar_archivo_subido(file)
-        return {"status": "ok", "message": mensaje} if exito else HTTPException(500, detail=mensaje)
+        if exito:
+            return {"status": "ok", "message": mensaje}
+        else:
+            raise HTTPException(status_code=500, detail=mensaje)
     except Exception as e:
         logger.error(f"Error upload: {e}")
         raise HTTPException(500, detail="Error procesando archivo")
@@ -104,17 +114,17 @@ def upload_file_endpoint(file: UploadFile = File(...)):
 @app.post("/upload-audio/") 
 def upload_audio_endpoint(file: UploadFile = File(...)):
     if not file.content_type.startswith('audio/'):
-         raise HTTPException(status_code=400, detail="Debe ser audio")
+         raise HTTPException(status_code=400, detail="El archivo debe ser de audio.")
     try:
+        # procesar_audio_gemini ya se encarga de transcribir Y guardar en BD
         texto = procesar_audio_gemini(file)
-        # Nota: La llamada a guardar_acta aquí es redundante si ya está en tools/audio.py.
-        # Si ya lo hace audio.py (como parece), esta línea podría eliminarse para limpieza. 
-        # Pero por seguridad, la dejo si la lógica es necesaria en main.
-        if texto: guardar_acta(transcripcion=texto, resumen=None)
+        
         return {"mensaje": "Éxito", "transcripcion": texto}
     except Exception as e:
         logger.error(f"Error audio: {e}")
         raise HTTPException(500, detail=str(e))
+
+# --- ENDPOINTS DE ACTAS ---
 
 @app.get("/actas")
 def get_actas():
@@ -122,5 +132,6 @@ def get_actas():
 
 @app.delete("/actas/{id_acta}")
 def delete_acta_endpoint(id_acta: int):
-    if borrar_acta(id_acta): return {"status": "ok"}
+    if borrar_acta(id_acta): 
+        return {"status": "ok"}
     raise HTTPException(404, detail="No encontrado")

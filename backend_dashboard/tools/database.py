@@ -2,7 +2,7 @@ import os
 from supabase import create_client, Client
 import logging
 from langchain_core.tools import tool
-from langchain_google_genai import GoogleGenerativeAIEmbeddings
+from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGenerativeAI
 
 logger = logging.getLogger(__name__)
 
@@ -11,10 +11,17 @@ url: str = os.environ.get("SUPABASE_URL")
 key: str = os.environ.get("SUPABASE_KEY")
 supabase: Client = create_client(url, key)
 
-# Modelo de embeddings ACTUALIZADO y más potente
+# Modelo de embeddings
 embeddings_model = GoogleGenerativeAIEmbeddings(
-    model="models/text-embedding-004",  # <--- CAMBIO CLAVE: Modelo más reciente
+    model="models/text-embedding-004", 
     task_type="retrieval_query"
+)
+
+# --- NUEVO: LLM pequeño para "pensar" sinónimos antes de buscar ---
+llm_reformulador = ChatGoogleGenerativeAI(
+    model="gemini-2.5-flash", 
+    temperature=0.3,
+    max_retries=2
 )
 
 # --- FUNCIONES DE ACTAS (Mantenemos lo que ya tenías) ---
@@ -52,7 +59,7 @@ def consultar_actas_reuniones(query: str):
         texto += f"Fecha: {a.get('created_at', '')[:10]} | {a.get('titulo')}\nResumen: {a.get('transcripcion')[:500]}...\n\n"
     return texto
 
-# --- HERRAMIENTA 2: CONSULTAR BIBLIOTECA (OPTIMIZADA) ---
+# --- HERRAMIENTA 2: CONSULTAR BIBLIOTECA (ULTRA MEJORADA) ---
 @tool
 def consultar_biblioteca_documentos(pregunta: str):
     """
@@ -60,31 +67,43 @@ def consultar_biblioteca_documentos(pregunta: str):
     en archivos subidos, como presupuestos, cronogramas 2026, listas, excel o documentos PDF.
     """
     try:
-        # 1. Convertir la pregunta del usuario en números (vector)
-        vector_pregunta = embeddings_model.embed_query(pregunta)
+        # 1. PASO COGNITIVO: Expandir la consulta (Query Expansion)
+        # Esto permite encontrar "Presupuesto" si el usuario busca "Plata"
+        prompt_expansion = (
+            f"Actúa como un bibliotecario experto. Genera una consulta de búsqueda optimizada "
+            f"para una base de datos vectorial basada en esta pregunta coloquial del usuario: '{pregunta}'. "
+            f"Incluye términos técnicos administrativos si es necesario. "
+            f"Solo devuelve la consulta optimizada, nada más."
+        )
+        consulta_optimizada = llm_reformulador.invoke(prompt_expansion).content.strip()
+        logger.info(f"🔍 Búsqueda Docs: '{pregunta}' -> Optimizada: '{consulta_optimizada}'")
+
+        # 2. Convertir la consulta OPTIMIZADA en vector
+        vector_pregunta = embeddings_model.embed_query(consulta_optimizada)
         
-        # 2. Llamar a la función de búsqueda inteligente en Supabase (RPC)
+        # 3. Llamar a la función de búsqueda inteligente en Supabase (RPC)
         response = supabase.rpc(
             "buscar_documentos", 
             {
                 "query_embedding": vector_pregunta,
-                "match_threshold": 0.5, # <--- CAMBIO CLAVE: Bajamos la vara (antes 0.7)
-                "match_count": 8        # <--- CAMBIO CLAVE: Más contexto (antes 5)
+                "match_threshold": 0.45, # Umbral más flexible gracias a la expansión
+                "match_count": 8
             }
         ).execute()
         
         if not response.data:
-            return "RESULTADO: No se encontraron documentos internos con esa información específica."
+            return f"RESULTADO: No se encontraron documentos internos para '{consulta_optimizada}'."
             
-        # 3. Formatear la respuesta para Pitu con métrica de confianza
-        contexto = f"--- RESULTADOS DE LA BIBLIOTECA INTERNA PARA: '{pregunta}' ---\n"
+        # 4. Formatear la respuesta
+        contexto = f"--- RESULTADOS DE LA BIBLIOTECA INTERNA (Búsqueda: {consulta_optimizada}) ---\n"
         for doc in response.data:
-            similitud = round(doc.get('similarity', 0) * 100, 1) # Extra
+            similitud = round(doc.get('similarity', 0) * 100, 1)
             archivo = doc.get('metadata', {}).get('source', 'Desconocido')
             contenido = doc.get('content', '')
-            contexto += f"📄 [Fuente: {archivo} | Confianza: {similitud}%]:\n...{contenido}...\n\n"
+            contexto += f"📄 [Fuente: {archivo} | Relevancia: {similitud}%]:\n...{contenido}...\n\n"
             
         return contexto
 
     except Exception as e:
+        logger.error(f"Error biblioteca: {e}")
         return f"Error consultando la biblioteca: {str(e)}"
