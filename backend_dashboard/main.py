@@ -1,7 +1,7 @@
 import os
 import logging
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, UploadFile, File 
+from fastapi import FastAPI, HTTPException, UploadFile, File, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from typing import List, Optional
@@ -112,12 +112,18 @@ def upload_file_endpoint(file: UploadFile = File(...)):
         raise HTTPException(500, detail="Error procesando archivo")
 
 @app.post("/upload-audio/") 
-def upload_audio_endpoint(file: UploadFile = File(...)):
+def upload_audio_endpoint(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
     if not file.content_type.startswith('audio/'):
          raise HTTPException(status_code=400, detail="El archivo debe ser de audio.")
     try:
-        # procesar_audio_gemini ya se encarga de transcribir Y guardar en BD
+        # 1. Transcribir (El usuario espera esto)
         texto = procesar_audio_gemini(file)
+        
+        # 2. Guardar en BD en segundo plano (El usuario NO espera esto)
+        # Nota: Asegúrate de que 'procesar_audio_gemini' devuelva el texto limpio
+        # y que 'guardar_acta' maneje la inserción.
+        if texto:
+            background_tasks.add_task(guardar_acta, transcripcion=texto)
         
         return {"mensaje": "Éxito", "transcripcion": texto}
     except Exception as e:

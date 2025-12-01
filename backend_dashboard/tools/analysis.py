@@ -3,19 +3,21 @@ import logging
 from langchain_experimental.agents import create_pandas_dataframe_agent
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain.tools import tool
-# Asegúrate de que esta importación coincida con tu estructura de carpetas
-from tools.dashboard import obtener_datos_sheet, SHEET_CLIENTE_ID, WORKSHEET_CLIENTE_GID, procesar_fila_cliente
+# --- CAMBIO CLAVE: Importamos la versión con CACHÉ ---
+from tools.dashboard import obtener_datos_sheet_cached, SHEET_CLIENTE_ID, WORKSHEET_CLIENTE_GID, procesar_fila_cliente
 
 # Configurar logger
 logger = logging.getLogger(__name__)
 
 def get_dataframe_cliente():
     """
-    Obtiene los datos crudos, los procesa y limpia la columna COSTO para análisis numérico.
+    Obtiene los datos usando el CACHÉ, los procesa y limpia la columna COSTO y FECHA.
     """
-    raw_data = obtener_datos_sheet(SHEET_CLIENTE_ID, WORKSHEET_CLIENTE_GID)
+    # Usamos la función optimizada
+    raw_data = obtener_datos_sheet_cached(SHEET_CLIENTE_ID, WORKSHEET_CLIENTE_GID)
+    
     if not raw_data:
-        logger.error("❌ No se obtuvieron datos crudos del Sheet")
+        logger.error("❌ No se obtuvieron datos (o caché vacío)")
         return pd.DataFrame()
     
     data_limpia = [procesar_fila_cliente(r) for r in raw_data]
@@ -51,7 +53,13 @@ def get_dataframe_cliente():
         df['COSTO'] = df['COSTO'].apply(limpiar_moneda)
         
         logger.info(f"✅ Muestra de datos COSTO limpios: {df['COSTO'].head(5).tolist()}")
-        # logger.info(f"💰 Suma total verificada en Python: {df['COSTO'].sum()}")
+
+    # --- NUEVA LÓGICA: Limpieza de FECHA (Datetime) ---
+    # Esto es CRÍTICO para que el agente entienda "Noviembre 2025"
+    if 'FECHA' in df.columns:
+        # Intentamos convertir a datetime. 'coerce' convierte errores en NaT (Not a Time)
+        # dayfirst=True ayuda con formatos latinos (DD/MM/YYYY)
+        df['FECHA_DT'] = pd.to_datetime(df['FECHA'], errors='coerce', dayfirst=True)
 
     return df
 
@@ -61,10 +69,9 @@ def crear_agente_pandas():
     if df.empty:
         return None
 
-    # --- CAMBIO CLAVE: Usamos 'gemini-1.5-flash' para evitar el error 404 ---
-    # Este modelo es muy capaz para análisis de datos y está disponible en la capa estándar.
+    # --- CORRECCIÓN: Usamos el nombre específico del modelo para evitar errores 404 ---
     llm = ChatGoogleGenerativeAI(
-        model="gemini-1.5-flash", 
+        model="gemini-1.5-flash-001", 
         temperature=0,
         max_retries=2
     )
@@ -75,14 +82,18 @@ def crear_agente_pandas():
         verbose=True,
         allow_dangerous_code=True, # Necesario para ejecutar Python
         handle_parsing_errors=True,
-        # Prefix le da "personalidad" y reglas al experto en datos
+        # Prefix actualizado con instrucciones sobre FECHAS y COSTOS
         prefix="""Eres un experto analista de datos financiero utilizando Pandas. 
-        Trabajas con un DataFrame que contiene información de gestión y costos.
-        IMPORTANTE:
-        1. La columna 'COSTO' ya es numérica (float). No intentes convertirla de nuevo.
-        2. Si te piden sumar, usa df['COSTO'].sum().
-        3. Si te piden filtrar por texto, usa str.contains(..., case=False).
-        Responde siempre con la respuesta final clara."""
+        Trabajas con un DataFrame 'df'.
+        
+        REGLAS DE DATOS:
+        1. 'COSTO': Es float numérico. Suma directo: df['COSTO'].sum().
+        2. 'FECHA_DT': Es columna datetime. Úsala para filtrar por tiempo.
+           - Ejemplo Noviembre 2025: df[(df['FECHA_DT'].dt.month == 11) & (df['FECHA_DT'].dt.year == 2025)]
+        3. 'FECHA': Es la fecha original en texto (úsala solo si FECHA_DT falla).
+        4. Si te piden filtrar por texto, usa str.contains(..., case=False).
+        
+        Responde siempre con la respuesta final clara y concisa."""
     )
 
 # ESTA ES LA HERRAMIENTA QUE USARÁ EL AGENTE PRINCIPAL
@@ -104,5 +115,5 @@ def analista_de_datos_cliente(consulta: str):
         respuesta = agent.invoke({"input": consulta})
         return respuesta["output"]
     except Exception as e:
-        logger.error(f"Error en analista de datos: {e}")
+        logger.error(f"Error en analista de datos: {e}", exc_info=True)
         return f"No pude realizar el cálculo debido a un error técnico: {str(e)}"

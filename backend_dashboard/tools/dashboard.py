@@ -4,6 +4,7 @@ import gspread
 import logging
 from google.oauth2 import service_account
 from langchain.tools import tool
+from cachetools import TTLCache, cached
 
 # Configurar Logger específico para este módulo
 logger = logging.getLogger(__name__)
@@ -14,6 +15,11 @@ WORKSHEET_MINISTERIO_GID = 563858184
 
 SHEET_CLIENTE_ID = "1uAIwNTIXF0HSP2h5owe0G-XS3lL43ZFITzD7Ekl-lBU" 
 WORKSHEET_CLIENTE_GID = None 
+
+# --- CONFIGURACIÓN DE CACHÉ (OPTIMIZACIÓN) ---
+# Guardamos los resultados por 10 minutos (600 segundos)
+# maxsize=5 es suficiente porque solo consultamos un par de hojas distintas
+cache_agenda = TTLCache(maxsize=5, ttl=600)
 
 def autenticar_google_sheets():
     try:
@@ -46,7 +52,11 @@ def autenticar_google_sheets():
         return None
 
 def obtener_datos_sheet(spreadsheet_id: str, worksheet_gid: int = None):
+    """
+    Función pura que realiza la petición real a Google Sheets API.
+    """
     try:
+        logger.info(f"📡 Conectando a Google Sheets: {spreadsheet_id} (Sin caché)")
         client = autenticar_google_sheets()
         if not client: return []
         
@@ -89,18 +99,25 @@ def obtener_datos_sheet(spreadsheet_id: str, worksheet_gid: int = None):
         logger.error(f"Error general leyendo sheet: {e}")
         return []
 
+# --- WRAPPER CON CACHÉ ---
+@cached(cache_agenda)
+def obtener_datos_sheet_cached(spreadsheet_id: str, worksheet_gid: int = None):
+    """
+    Versión memorizada de la obtención de datos.
+    Si se llama con los mismos ID dentro de 10 mins, devuelve la memoria RAM instantáneamente.
+    """
+    return obtener_datos_sheet(spreadsheet_id, worksheet_gid)
+
 # --- LOGICA DE PROCESAMIENTO SEPARADA ---
 
 def procesar_fila_cliente(fila):
     """Normaliza solo las filas de la gestión interna"""
     f_map = {k.lower().strip(): v for k, v in fila.items()}
     
-    # --- CORRECCIÓN: Búsqueda flexible de la columna Costo ---
     costo_encontrado = "0"
     for key, value in f_map.items():
-        # Busca palabras clave comunes si el nombre exacto falla
         if any(palabra in key for palabra in ["costo", "precio", "valor", "monto", "importe", "presupuesto"]):
-            if value and str(value).strip(): # Si tiene valor
+            if value and str(value).strip(): 
                 costo_encontrado = value
                 break
 
@@ -110,10 +127,7 @@ def procesar_fila_cliente(fila):
         "LUGAR": f_map.get("lugar") or f_map.get("destino", ""),
         "INSTITUCIÓN": f_map.get("institución") or f_map.get("institucion", ""),
         "NOMBRE": f_map.get("nombre", ""),
-        
-        # Usamos el valor encontrado dinámicamente
         "COSTO": costo_encontrado, 
-        
         "EE": f_map.get("ee", ""),
         "ESTADO": f_map.get("estado", ""),
         "RENDICIÓN": f_map.get("rendición") or f_map.get("rendicion", ""),
@@ -135,30 +149,34 @@ def procesar_fila_ministerio(fila):
         "LUGAR": lugar
     }
 
-# --- FUNCIONES EXPORTADAS PARA MAIN.PY ---
+# --- FUNCIONES EXPORTADAS PARA MAIN.PY (USANDO CACHÉ) ---
 
 def get_data_cliente_formatted():
-    raw = obtener_datos_sheet(SHEET_CLIENTE_ID, WORKSHEET_CLIENTE_GID)
+    # Usamos la versión _cached
+    raw = obtener_datos_sheet_cached(SHEET_CLIENTE_ID, WORKSHEET_CLIENTE_GID)
     return [procesar_fila_cliente(r) for r in raw]
 
 def get_data_ministerio_formatted():
-    raw = obtener_datos_sheet(SHEET_MINISTERIO_ID, WORKSHEET_MINISTERIO_GID)
+    # Usamos la versión _cached
+    raw = obtener_datos_sheet_cached(SHEET_MINISTERIO_ID, WORKSHEET_MINISTERIO_GID)
     return [procesar_fila_ministerio(r) for r in raw]
 
 def obtener_datos_raw():
     """Función legacy para compatibilidad si se necesitara unir"""
     return get_data_cliente_formatted() + get_data_ministerio_formatted()
 
-# --- TOOLS DEL AGENTE ---
+# --- TOOLS DEL AGENTE (USANDO CACHÉ) ---
 @tool
 def consultar_calendario_ministerio(consulta: str):
     """Consulta la agenda pública del ministerio."""
-    return json.dumps(obtener_datos_sheet(SHEET_MINISTERIO_ID, WORKSHEET_MINISTERIO_GID))
+    # Usamos la versión _cached
+    return json.dumps(obtener_datos_sheet_cached(SHEET_MINISTERIO_ID, WORKSHEET_MINISTERIO_GID))
 
 @tool
 def consultar_calendario_cliente(consulta: str):
     """Consulta la agenda de gestión interna."""
-    return json.dumps(obtener_datos_sheet(SHEET_CLIENTE_ID, WORKSHEET_CLIENTE_GID))
+    # Usamos la versión _cached
+    return json.dumps(obtener_datos_sheet_cached(SHEET_CLIENTE_ID, WORKSHEET_CLIENTE_GID))
 
 @tool
 def consultar_calendario(consulta: str):

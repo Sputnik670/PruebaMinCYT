@@ -17,11 +17,18 @@ url = os.environ.get("SUPABASE_URL")
 key = os.environ.get("SUPABASE_KEY")
 supabase = create_client(url, key)
 
-# --- MODELO DE EMBEDDINGS ACTUALIZADO ---
-embeddings_model = GoogleGenerativeAIEmbeddings(
-    model="models/text-embedding-004", # <--- CORREGIDO: Modelo más reciente y potente
-    task_type="retrieval_document"
-)
+# --- MODELO DE EMBEDDINGS ROBUSTO (Con Fallback) ---
+try:
+    embeddings_model = GoogleGenerativeAIEmbeddings(
+        model="models/text-embedding-004", 
+        task_type="retrieval_document"
+    )
+except Exception:
+    logger.warning("⚠️ Modelo 004 no disponible, usando fallback a embedding-001")
+    embeddings_model = GoogleGenerativeAIEmbeddings(
+        model="models/embedding-001", 
+        task_type="retrieval_document"
+    )
 
 def procesar_archivo_subido(file: UploadFile):
     """
