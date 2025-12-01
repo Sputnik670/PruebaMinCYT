@@ -6,12 +6,16 @@ import { Message } from '../types/types';
 const rawUrl = import.meta.env.VITE_BACKEND_URL || "http://localhost:8000";
 const API_URL = rawUrl.replace(/\/api\/?$/, "").replace(/\/$/, "");
 
-// --- FUNCIÓN 1: CHAT DE TEXTO ---
-export const sendMessageToGemini = async (message: string, history: Message[]) => {
+// --- FUNCIÓN 1: CHAT DE TEXTO CON STREAMING ---
+export const sendMessageToGemini = async (
+  message: string, 
+  history: Message[], 
+  onStreamUpdate: (chunk: string) => void // <--- NUEVO: Callback para ir enviando el texto
+) => {
   
-  // [CORRECCIÓN] Ahora incluimos el 'id' en la serialización
+  // [CORRECCIÓN] Serialización correcta con ID
   const serializedHistory = history.map(msg => ({
-    id: msg.id, // <--- ESTO FALTABA Y CAUSABA EL ERROR 422
+    id: msg.id,
     text: msg.text,
     sender: msg.sender,
     timestamp: msg.timestamp.toISOString(), 
@@ -27,14 +31,31 @@ export const sendMessageToGemini = async (message: string, history: Message[]) =
     });
 
     if (!response.ok) {
-      // Intentamos leer el detalle del error del servidor si existe
       const errorData = await response.json().catch(() => ({}));
       console.error("Detalle del error del servidor:", errorData);
       throw new Error(`Error del servidor: ${response.status} - ${JSON.stringify(errorData)}`);
     }
 
-    const data = await response.json();
-    return data.response;
+    if (!response.body) throw new Error("La respuesta no tiene cuerpo para leer (stream).");
+
+    // --- LÓGICA DE STREAMING ---
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder("utf-8");
+    let done = false;
+
+    while (!done) {
+      const { value, done: doneReading } = await reader.read();
+      done = doneReading;
+      
+      if (value) {
+        const chunk = decoder.decode(value, { stream: true });
+        // Enviamos el fragmento a la interfaz inmediatamente
+        onStreamUpdate(chunk); 
+      }
+    }
+    
+    return true; // Indicamos éxito al finalizar
+
   } catch (error) {
     console.error("Error conectando con el Backend:", error);
     throw error;

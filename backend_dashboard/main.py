@@ -3,8 +3,9 @@ import logging
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, UploadFile, File, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse  # <--- NUEVO: Para Streaming
 from pydantic import BaseModel, Field
-from typing import List, Optional
+from typing import List, Optional, Generator
 
 from agents.main_agent import get_agent_response
 from tools.dashboard import (
@@ -36,6 +37,8 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    # CORRECCIÓN AUDITORÍA: Uso de 'r' para raw string en regex
+    allow_origin_regex=r"https://.*\.vercel\.app",
 )
 
 # --- MODELOS PYDANTIC ---
@@ -57,14 +60,33 @@ def read_root():
     return {"status": "online", "system": "MinCYT Dashboard & AI v2.0"}
 
 @app.post("/api/chat")
-def chat_endpoint(request: ChatRequest):
-    try:
-        # Pasamos el mensaje Y el historial al agente
-        respuesta = get_agent_response(request.message, request.history)
-        return {"response": respuesta}
-    except Exception as e:
-        logger.error(f"❌ Error en chat: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Error interno del asistente")
+async def chat_endpoint(request: ChatRequest):
+    """
+    Endpoint optimizado para Streaming.
+    Permite que el frontend reciba la respuesta progresivamente.
+    """
+    async def generate_response_stream():
+        try:
+            # Llamamos al agente. 
+            # NOTA: Para obtener el beneficio completo del streaming, 
+            # 'get_agent_response' en main_agent.py debería actualizarse para usar 'yield'.
+            # Este código es compatible con ambas versiones (string o generador).
+            respuesta = get_agent_response(request.message, request.history)
+            
+            if hasattr(respuesta, '__iter__') and not isinstance(respuesta, str):
+                # Si el agente ya soporta streaming real (es un generador)
+                for chunk in respuesta:
+                    yield chunk
+            else:
+                # Si el agente devuelve todo el texto de una vez (legacy)
+                yield respuesta
+
+        except Exception as e:
+            logger.error(f"❌ Error crítico en chat_endpoint: {str(e)}", exc_info=True)
+            yield f"Error del sistema: {str(e)}"
+
+    # Retornamos un StreamingResponse con media_type text/plain para facilitar la lectura en el frontend
+    return StreamingResponse(generate_response_stream(), media_type="text/plain")
 
 # --- ENDPOINTS DE DATOS (AGENDA) ---
 
@@ -72,7 +94,8 @@ def chat_endpoint(request: ChatRequest):
 def get_agenda_ministerio_endpoint():
     """Devuelve la tabla oficial limpia"""
     try:
-        return get_data_ministerio_formatted()
+        data = get_data_ministerio_formatted()
+        return data
     except Exception as e:
         logger.error(f"Error agenda ministerio: {e}")
         return []
@@ -81,7 +104,8 @@ def get_agenda_ministerio_endpoint():
 def get_agenda_cliente_endpoint():
     """Devuelve la tabla de gestión limpia"""
     try:
-        return get_data_cliente_formatted()
+        data = get_data_cliente_formatted()
+        return data
     except Exception as e:
         logger.error(f"Error agenda cliente: {e}")
         return []
@@ -106,38 +130,46 @@ def upload_file_endpoint(file: UploadFile = File(...)):
         if exito:
             return {"status": "ok", "message": mensaje}
         else:
+            logger.warning(f"Fallo procesamiento archivo: {mensaje}")
             raise HTTPException(status_code=500, detail=mensaje)
     except Exception as e:
-        logger.error(f"Error upload: {e}")
-        raise HTTPException(500, detail="Error procesando archivo")
+        logger.error(f"Error upload exception: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Error interno procesando archivo")
 
 @app.post("/upload-audio/") 
 def upload_audio_endpoint(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
     if not file.content_type.startswith('audio/'):
-         raise HTTPException(status_code=400, detail="El archivo debe ser de audio.")
+         raise HTTPException(status_code=400, detail="El archivo debe ser de audio válido.")
+    
     try:
-        # 1. Transcribir (El usuario espera esto)
+        # 1. Transcribir (El usuario espera esto en tiempo real)
         texto = procesar_audio_gemini(file)
         
-        # 2. Guardar en BD en segundo plano (El usuario NO espera esto)
-        # Nota: Asegúrate de que 'procesar_audio_gemini' devuelva el texto limpio
-        # y que 'guardar_acta' maneje la inserción.
+        # 2. Guardar en BD en segundo plano (Background Task para no bloquear)
         if texto:
             background_tasks.add_task(guardar_acta, transcripcion=texto)
         
         return {"mensaje": "Éxito", "transcripcion": texto}
     except Exception as e:
-        logger.error(f"Error audio: {e}")
-        raise HTTPException(500, detail=str(e))
+        logger.error(f"Error procesando audio: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
 
 # --- ENDPOINTS DE ACTAS ---
 
 @app.get("/actas")
 def get_actas():
-    return obtener_historial_actas()
+    try:
+        return obtener_historial_actas()
+    except Exception as e:
+        logger.error(f"Error obteniendo actas: {e}")
+        return []
 
 @app.delete("/actas/{id_acta}")
 def delete_acta_endpoint(id_acta: int):
-    if borrar_acta(id_acta): 
-        return {"status": "ok"}
-    raise HTTPException(404, detail="No encontrado")
+    try:
+        if borrar_acta(id_acta): 
+            return {"status": "ok"}
+        raise HTTPException(status_code=404, detail="Acta no encontrada")
+    except Exception as e:
+        logger.error(f"Error borrando acta {id_acta}: {e}")
+        raise HTTPException(status_code=500, detail="Error interno al borrar")

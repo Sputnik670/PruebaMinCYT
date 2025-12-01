@@ -3,7 +3,7 @@ import logging
 from langchain_experimental.agents import create_pandas_dataframe_agent
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain.tools import tool
-# --- CAMBIO CLAVE: Importamos la versión con CACHÉ ---
+# Importamos la lógica de datos con caché
 from tools.dashboard import obtener_datos_sheet_cached, SHEET_CLIENTE_ID, WORKSHEET_CLIENTE_GID, procesar_fila_cliente
 
 # Configurar logger
@@ -11,37 +11,33 @@ logger = logging.getLogger(__name__)
 
 def get_dataframe_cliente():
     """
-    Obtiene los datos usando el CACHÉ, los procesa y limpia la columna COSTO y FECHA.
+    Obtiene los datos usando el CACHÉ, normaliza columnas y tipos de datos.
     """
-    # Usamos la función optimizada
     raw_data = obtener_datos_sheet_cached(SHEET_CLIENTE_ID, WORKSHEET_CLIENTE_GID)
     
     if not raw_data:
-        logger.error("❌ No se obtuvieron datos (o caché vacío)")
+        logger.error("❌ No se obtuvieron datos para el DataFrame.")
         return pd.DataFrame()
     
+    # Procesar lista de diccionarios
     data_limpia = [procesar_fila_cliente(r) for r in raw_data]
     df = pd.DataFrame(data_limpia)
     
-    # --- Limpieza numérica robusta ---
+    # 1. Limpieza de Moneda (COSTO)
     if 'COSTO' in df.columns:
-        logger.info(f"🔍 Muestra de datos COSTO crudos: {df['COSTO'].head(5).tolist()}")
-
         def limpiar_moneda(valor):
             if not valor: return 0.0
             val_str = str(valor).strip()
-            # Eliminar símbolos de moneda y texto
+            # Quitar símbolos
             val_str = val_str.replace('$', '').replace('USD', '').replace('€', '').strip()
             
-            # Lógica para detectar formato europeo (1.000,00) vs americano (1,000.00)
+            # Detección de formato Europeo (1.000,50) vs US (1,000.50)
             if ',' in val_str and '.' in val_str:
-                # Asumimos formato latam/europeo: punto para miles, coma para decimales
-                val_str = val_str.replace('.', '').replace(',', '.')
+                val_str = val_str.replace('.', '').replace(',', '.') # Asumimos formato AR/EU
             elif ',' in val_str:
-                # Solo comas -> decimal
-                val_str = val_str.replace(',', '.')
+                val_str = val_str.replace(',', '.') # Solo coma es decimal
             
-            # Dejar solo dígitos y punto
+            # Dejar solo números y punto
             val_str = ''.join(c for c in val_str if c.isdigit() or c == '.')
             
             try:
@@ -49,71 +45,105 @@ def get_dataframe_cliente():
             except ValueError:
                 return 0.0
 
-        # Aplicar la limpieza
         df['COSTO'] = df['COSTO'].apply(limpiar_moneda)
-        
-        logger.info(f"✅ Muestra de datos COSTO limpios: {df['COSTO'].head(5).tolist()}")
 
-    # --- NUEVA LÓGICA: Limpieza de FECHA (Datetime) ---
-    # Esto es CRÍTICO para que el agente entienda "Noviembre 2025"
+    # 2. Limpieza de Fechas (CRÍTICO PARA FILTROS TEMPORALES)
     if 'FECHA' in df.columns:
-        # Intentamos convertir a datetime. 'coerce' convierte errores en NaT (Not a Time)
-        # dayfirst=True ayuda con formatos latinos (DD/MM/YYYY)
+        # 'coerce' pone NaT si falla. 'dayfirst=True' es vital para fechas latinas (DD/MM/YYYY)
         df['FECHA_DT'] = pd.to_datetime(df['FECHA'], errors='coerce', dayfirst=True)
+        
+        # Creamos columnas auxiliares para facilitar el filtrado natural
+        df['MES'] = df['FECHA_DT'].dt.month
+        df['ANIO'] = df['FECHA_DT'].dt.year
+        df['DIA'] = df['FECHA_DT'].dt.day
 
     return df
 
 def crear_agente_pandas():
-    """Crea el agente especializado en DataFrames usando un modelo más potente."""
+    """Configura el agente de Pandas con Gemini Flash."""
     df = get_dataframe_cliente()
     if df.empty:
         return None
 
-    # --- CORRECCIÓN: Usamos el nombre específico del modelo para evitar errores 404 ---
     llm = ChatGoogleGenerativeAI(
         model="gemini-1.5-flash-001", 
-        temperature=0,
+        temperature=0, # Cero creatividad para matemáticas, máxima precisión
         max_retries=2
     )
     
+    # PROMPT DE INGENIERÍA DE DATOS
+    prompt_prefix = """
+    Eres un Analista de Datos Senior del MinCYT. Trabajas con un DataFrame de Pandas `df`.
+    
+    ESTRUCTURA DE DATOS:
+    - 'COSTO': Float. Para sumar dinero usa: df['COSTO'].sum().
+    - 'FECHA_DT': Datetime. Úsala para lógica temporal precisa.
+    - 'MES' (int), 'ANIO' (int): Úsalas para agrupar (ej: "Gastos de Noviembre" -> df[df['MES']==11]).
+    - 'MOTIVO / EVENTO': String. Contiene el nombre del evento.
+    - 'LUGAR': String. Destino o ubicación.
+
+    REGLAS DE OPERACIÓN:
+    1. Si te piden "Total" o "Suma", calcula la suma de 'COSTO' aplicando los filtros necesarios.
+    2. Si te piden filtrar por texto (ej: "Eventos en Cordoba"), usa: df[df['LUGAR'].str.contains('Cordoba', case=False, na=False)].
+    3. Si el resultado es una tabla o lista larga, resume diciendo "Hay X registros, los primeros son...".
+    4. NO inventes datos. Si el filtro devuelve vacío, dilo explícitamente.
+    """
+
     return create_pandas_dataframe_agent(
         llm,
         df,
         verbose=True,
-        allow_dangerous_code=True, # Necesario para ejecutar Python
+        allow_dangerous_code=True,
         handle_parsing_errors=True,
-        # Prefix actualizado con instrucciones sobre FECHAS y COSTOS
-        prefix="""Eres un experto analista de datos financiero utilizando Pandas. 
-        Trabajas con un DataFrame 'df'.
-        
-        REGLAS DE DATOS:
-        1. 'COSTO': Es float numérico. Suma directo: df['COSTO'].sum().
-        2. 'FECHA_DT': Es columna datetime. Úsala para filtrar por tiempo.
-           - Ejemplo Noviembre 2025: df[(df['FECHA_DT'].dt.month == 11) & (df['FECHA_DT'].dt.year == 2025)]
-        3. 'FECHA': Es la fecha original en texto (úsala solo si FECHA_DT falla).
-        4. Si te piden filtrar por texto, usa str.contains(..., case=False).
-        
-        Responde siempre con la respuesta final clara y concisa."""
+        return_intermediate_steps=True, # <--- CLAVE: Permite ver el razonamiento (código generado)
+        prefix=prompt_prefix
     )
 
-# ESTA ES LA HERRAMIENTA QUE USARÁ EL AGENTE PRINCIPAL
 @tool
 def analista_de_datos_cliente(consulta: str):
     """
-    PODEROSA herramienta para análisis numérico, sumas, promedios, filtrado complejo 
-    y conteo de la Agenda/Gestión Interna. 
-    Úsala cuando pregunten 'cuánto suma', 'cuántos eventos', 'promedio de gastos', 
-    o búsquedas con múltiples variables (ej: 'eventos en tal lugar con costo mayor a X').
-    NO la uses para cosas simples como 'qué hay mañana' (usa el calendario para eso).
+    Agente de Análisis de Datos (Data Analyst).
+    Úsalo para: Cálculos matemáticos, Sumar costos, Contar eventos, Filtrar por fechas complejas 
+    (ej: "Gastos del mes pasado", "Promedio de costos en CABA").
+    Retorna el resultado Y los pasos lógicos realizados.
     """
     try:
         agent = crear_agente_pandas()
         if not agent:
-            return "Error: No se pudieron cargar los datos para el análisis."
+            return "Error: La base de datos interna está vacía o no disponible."
         
-        # Le pedimos al agente de pandas que resuelva la consulta
-        respuesta = agent.invoke({"input": consulta})
-        return respuesta["output"]
+        logger.info(f"📊 Analista procesando: {consulta}")
+        
+        # Invocamos al agente
+        response = agent.invoke({"input": consulta})
+        
+        output_final = response.get("output", "")
+        pasos = response.get("intermediate_steps", [])
+
+        # --- MEJORA DE CALIDAD DE RESPUESTA ---
+        # Extraemos el "Pensamiento" (el código python que ejecutó) para darle contexto al Agente Principal
+        contexto_ejecucion = ""
+        if pasos:
+            contexto_ejecucion = "\n\n--- EVIDENCIA DEL CÁLCULO (Código Ejecutado) ---\n"
+            for action, observation in steps_summary(pasos):
+                contexto_ejecucion += f"🔹 Acción: {action}\n🔸 Resultado Parcial: {observation}\n"
+        
+        return f"{output_final}{contexto_ejecucion}"
+
     except Exception as e:
-        logger.error(f"Error en analista de datos: {e}", exc_info=True)
-        return f"No pude realizar el cálculo debido a un error técnico: {str(e)}"
+        logger.error(f"Error en analista: {e}", exc_info=True)
+        return f"Error técnico realizando el cálculo: {str(e)}"
+
+def steps_summary(steps):
+    """Helper para formatear los pasos intermedios de forma limpia"""
+    summary = []
+    for action, observation in steps:
+        # Limpiamos el output de observación si es muy largo (ej: un dataframe entero)
+        obs_str = str(observation)
+        if len(obs_str) > 200:
+            obs_str = obs_str[:200] + "... (truncado)"
+        
+        # action es un objeto AgentAction, action.tool_input suele ser el código python
+        code = getattr(action, 'tool_input', str(action))
+        summary.append((code, obs_str))
+    return summary

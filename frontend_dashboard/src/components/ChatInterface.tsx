@@ -8,7 +8,7 @@ export const ChatInterface: React.FC = () => {
   const [messages, setMessages] = useState<Message[]>([
     {
       id: '1',
-      text: '¡Hola! Soy el asistente virtual del MinCYT. ¿En qué puedo ayudarte hoy? Puedes preguntarme sobre la agenda, subir un PDF o usar tu voz.',
+      text: '¡Hola! Soy Pitu, el asistente virtual del MinCYT. ¿En qué puedo ayudarte hoy? Puedes preguntarme sobre la agenda, subir un PDF o usar tu voz.',
       sender: 'bot',
       timestamp: new Date()
     }
@@ -87,6 +87,7 @@ export const ChatInterface: React.FC = () => {
   };
   // -----------------------
 
+  // --- LÓGICA DE CHAT CON STREAMING ---
   const handleSendMessage = async () => {
     if (!inputValue.trim() || isLoading || isUploading || isRecording) return;
 
@@ -100,32 +101,52 @@ export const ChatInterface: React.FC = () => {
       timestamp: new Date(),
     };
 
-    // [MODIFICADO] Creamos el historial actualizado INCLUYENDO el mensaje actual
+    // Historial para enviar (sin el mensaje actual duplicado si la lógica de backend lo requiere, 
+    // pero aquí lo añadimos al estado local para verlo)
     const currentHistory = [...messages, userMessage];
 
     setMessages(prev => [...prev, userMessage]);
     setIsLoading(true);
 
+    // Creamos un ID para el mensaje del bot que se va a ir llenando
+    const botMsgId = (Date.now() + 1).toString();
+    
+    // Mensaje placeholder inicial
+    const botMessagePlaceholder: Message = {
+      id: botMsgId,
+      text: '', // Empieza vacío
+      sender: 'bot',
+      timestamp: new Date(),
+    };
+    setMessages(prev => [...prev, botMessagePlaceholder]);
+
     try {
-      // [MODIFICADO] Pasamos el historial completo al servicio
-      const responseText = await sendMessageToGemini(userText, currentHistory);
+      // Llamamos a la función de servicio con el callback de streaming
+      await sendMessageToGemini(userText, currentHistory, (chunk) => {
+        setMessages(prevMessages => {
+          return prevMessages.map(msg => {
+            if (msg.id === botMsgId) {
+              // Concatenamos el nuevo chunk al texto existente
+              return { ...msg, text: msg.text + chunk };
+            }
+            return msg;
+          });
+        });
+      });
       
-      const botMessage: Message = {
-        id: (Date.now() + 1).toString(),
-        text: responseText,
-        sender: 'bot',
-        timestamp: new Date(),
-      };
-      setMessages(prev => [...prev, botMessage]);
     } catch (error) {
       console.error("Error:", error);
-      const errorMessage: Message = {
-        id: (Date.now() + 1).toString(),
-        text: "Lo siento, tuve un problema de conexión. Por favor intenta de nuevo.",
-        sender: 'bot',
-        timestamp: new Date(),
-      };
-      setMessages(prev => [...prev, errorMessage]);
+      // Si falla, actualizamos el mensaje placeholder con el error o añadimos uno nuevo
+      setMessages(prev => {
+        // Opción: reemplazar el mensaje vacío con el error
+        const newMsgs = prev.map(msg => {
+            if (msg.id === botMsgId && msg.text === '') {
+                return { ...msg, text: "⚠️ Lo siento, tuve un problema de conexión. Por favor intenta de nuevo." };
+            }
+            return msg;
+        });
+        return newMsgs;
+      });
     } finally {
       setIsLoading(false);
     }
@@ -186,7 +207,7 @@ export const ChatInterface: React.FC = () => {
   };
 
   return (
-    <div className="flex flex-col min-h-[600px] bg-slate-50 font-sans">
+    <div className="flex flex-col min-h-[600px] bg-slate-50 font-sans h-full">
       
       <header className="bg-[#002f6c] text-white p-4 shadow-md flex items-center gap-3">
         <div className="p-2 bg-white/10 rounded-full">
@@ -203,29 +224,38 @@ export const ChatInterface: React.FC = () => {
           <MessageBubble key={msg.id} message={msg} />
         ))}
 
-        {(isLoading || isUploading) && (
+        {/* Loader solo se muestra si NO hay un mensaje del bot escribiéndose (streaming) */}
+        {(isLoading && messages[messages.length - 1]?.sender !== 'bot') && (
           <div className="flex justify-start w-full mb-6 animate-pulse">
             <div className="flex items-center gap-3">
                <div className="w-8 h-8 rounded-full bg-slate-200 flex items-center justify-center">
                   <Bot size={16} className="text-slate-500"/>
                </div>
                <div className="bg-slate-100 px-4 py-3 rounded-2xl rounded-tl-none border border-slate-200 flex items-center gap-2">
-                  {isUploading ? (
-                      <>
-                        <FileText size={16} className="text-slate-500" />
-                        <span className="text-xs text-slate-500">Leyendo documento...</span>
-                      </>
-                  ) : (
-                      <div className="flex space-x-1">
-                        <div className="w-2 h-2 bg-slate-400 rounded-full animate-bounce"></div>
-                        <div className="w-2 h-2 bg-slate-400 rounded-full animate-bounce delay-75"></div>
-                        <div className="w-2 h-2 bg-slate-400 rounded-full animate-bounce delay-150"></div>
-                      </div>
-                  )}
+                  <div className="flex space-x-1">
+                    <div className="w-2 h-2 bg-slate-400 rounded-full animate-bounce"></div>
+                    <div className="w-2 h-2 bg-slate-400 rounded-full animate-bounce delay-75"></div>
+                    <div className="w-2 h-2 bg-slate-400 rounded-full animate-bounce delay-150"></div>
+                  </div>
                </div>
             </div>
           </div>
         )}
+        
+        {isUploading && (
+             <div className="flex justify-start w-full mb-6 animate-pulse">
+             <div className="flex items-center gap-3">
+                <div className="w-8 h-8 rounded-full bg-slate-200 flex items-center justify-center">
+                   <Bot size={16} className="text-slate-500"/>
+                </div>
+                <div className="bg-slate-100 px-4 py-3 rounded-2xl rounded-tl-none border border-slate-200 flex items-center gap-2">
+                   <FileText size={16} className="text-slate-500" />
+                   <span className="text-xs text-slate-500">Leyendo documento...</span>
+                </div>
+             </div>
+           </div>
+        )}
+
         <div ref={messagesEndRef} />
       </div>
 
