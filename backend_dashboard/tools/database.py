@@ -17,9 +17,10 @@ embeddings_model = GoogleGenerativeAIEmbeddings(
     task_type="retrieval_query"
 )
 
-# --- NUEVO: LLM pequeño para "pensar" sinónimos antes de buscar ---
+# --- NUEVO: LLM para "pensar" sinónimos antes de buscar ---
+# Usamos Flash por velocidad. Si prefieres potencia bruta, cambia a "gemini-1.5-pro"
 llm_reformulador = ChatGoogleGenerativeAI(
-    model="gemini-2.5-flash", 
+    model="gemini-1.5-flash", 
     temperature=0.3,
     max_retries=2
 )
@@ -59,7 +60,7 @@ def consultar_actas_reuniones(query: str):
         texto += f"Fecha: {a.get('created_at', '')[:10]} | {a.get('titulo')}\nResumen: {a.get('transcripcion')[:500]}...\n\n"
     return texto
 
-# --- HERRAMIENTA 2: CONSULTAR BIBLIOTECA (ULTRA MEJORADA) ---
+# --- HERRAMIENTA 2: CONSULTAR BIBLIOTECA (RAG) ---
 @tool
 def consultar_biblioteca_documentos(pregunta: str):
     """
@@ -68,7 +69,6 @@ def consultar_biblioteca_documentos(pregunta: str):
     """
     try:
         # 1. PASO COGNITIVO: Expandir la consulta (Query Expansion)
-        # Esto permite encontrar "Presupuesto" si el usuario busca "Plata"
         prompt_expansion = (
             f"Actúa como un bibliotecario experto. Genera una consulta de búsqueda optimizada "
             f"para una base de datos vectorial basada en esta pregunta coloquial del usuario: '{pregunta}'. "
@@ -86,7 +86,7 @@ def consultar_biblioteca_documentos(pregunta: str):
             "buscar_documentos", 
             {
                 "query_embedding": vector_pregunta,
-                "match_threshold": 0.45, # Umbral más flexible gracias a la expansión
+                "match_threshold": 0.45, 
                 "match_count": 8
             }
         ).execute()
@@ -107,3 +107,25 @@ def consultar_biblioteca_documentos(pregunta: str):
     except Exception as e:
         logger.error(f"Error biblioteca: {e}")
         return f"Error consultando la biblioteca: {str(e)}"
+
+# --- HERRAMIENTA 3: MEMORIA ACTIVA (NUEVA) ---
+@tool
+def guardar_conocimiento(texto: str, etiqueta: str = "Aprendizaje Chat"):
+    """
+    Úsala cuando el usuario te pida explícitamente RECORDAR o GUARDAR un dato importante para el futuro.
+    Ej: "Recuerda que el código del proyecto es 999".
+    NO la uses para charla casual.
+    """
+    try:
+        logger.info(f"🧠 Guardando recuerdo: {texto[:50]}...")
+        vector = embeddings_model.embed_query(texto)
+        registro = {
+            "content": texto,
+            "metadata": {"source": "Memoria del Asistente", "type": etiqueta},
+            "embedding": vector
+        }
+        supabase.table("libreria_documentos").insert(registro).execute()
+        return "✅ Dato guardado exitosamente en mi memoria a largo plazo."
+    except Exception as e:
+        logger.error(f"Error guardando memoria: {e}")
+        return "Error técnico al intentar guardar el recuerdo."

@@ -77,6 +77,7 @@ def obtener_datos_sheet(spreadsheet_id: str, worksheet_gid: int = None):
         data = worksheet.get_all_values()
         if len(data) < 2: return []
 
+        # Detección inteligente de cabecera (busca palabras clave en las primeras 8 filas)
         header_idx = 0
         for i, row in enumerate(data[:8]): 
             row_lower = [str(c).lower() for c in row]
@@ -166,17 +167,50 @@ def obtener_datos_raw():
     return get_data_cliente_formatted() + get_data_ministerio_formatted()
 
 # --- TOOLS DEL AGENTE (USANDO CACHÉ) ---
+
+# 1. NUEVA HERRAMIENTA DE VALIDACIÓN
+@tool
+def analizar_estructura_tablas(consulta: str):
+    """
+    Úsala cuando dudes sobre qué información contiene la agenda o si el usuario pregunta 
+    por columnas específicas (ej: '¿Hay columna de precios?').
+    Devuelve los nombres de las columnas detectadas en la planilla de Gestión (Cliente).
+    """
+    try:
+        raw_data = obtener_datos_sheet_cached(SHEET_CLIENTE_ID, WORKSHEET_CLIENTE_GID)
+        if not raw_data:
+            return "No se pudieron leer datos de la planilla."
+        
+        columnas = list(raw_data[0].keys())
+        ejemplo = raw_data[0]
+        
+        return f"""
+        --- ESTRUCTURA DETECTADA ---
+        Columnas encontradas: {', '.join(columnas)}
+        
+        Ejemplo de la primera fila:
+        {json.dumps(ejemplo, indent=2, ensure_ascii=False)}
+        
+        NOTA PARA EL AGENTE:
+        - Si ves columnas como 'Valor' o 'Importe', úsalas como Costo.
+        - Si ves columnas extrañas, infórmale al usuario.
+        """
+    except Exception as e:
+        return f"Error analizando estructura: {e}"
+
 @tool
 def consultar_calendario_ministerio(consulta: str):
     """Consulta la agenda pública del ministerio."""
     # Usamos la versión _cached
-    return json.dumps(obtener_datos_sheet_cached(SHEET_MINISTERIO_ID, WORKSHEET_MINISTERIO_GID))
+    raw = obtener_datos_sheet_cached(SHEET_MINISTERIO_ID, WORKSHEET_MINISTERIO_GID)
+    return json.dumps([procesar_fila_ministerio(r) for r in raw])
 
 @tool
 def consultar_calendario_cliente(consulta: str):
     """Consulta la agenda de gestión interna."""
     # Usamos la versión _cached
-    return json.dumps(obtener_datos_sheet_cached(SHEET_CLIENTE_ID, WORKSHEET_CLIENTE_GID))
+    raw = obtener_datos_sheet_cached(SHEET_CLIENTE_ID, WORKSHEET_CLIENTE_GID)
+    return json.dumps([procesar_fila_cliente(r) for r in raw])
 
 @tool
 def consultar_calendario(consulta: str):

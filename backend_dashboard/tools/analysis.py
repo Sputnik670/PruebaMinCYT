@@ -71,7 +71,7 @@ def crear_agente_pandas():
         max_retries=2
     )
     
-    # PROMPT DE INGENIERÍA DE DATOS
+    # --- PROMPT DE INGENIERÍA DE DATOS (MEJORADO: AUDITABILIDAD) ---
     prompt_prefix = """
     Eres un Analista de Datos Senior del MinCYT. Trabajas con un DataFrame de Pandas `df`.
     
@@ -81,12 +81,19 @@ def crear_agente_pandas():
     - 'MES' (int), 'ANIO' (int): Úsalas para agrupar (ej: "Gastos de Noviembre" -> df[df['MES']==11]).
     - 'MOTIVO / EVENTO': String. Contiene el nombre del evento.
     - 'LUGAR': String. Destino o ubicación.
+    - 'EE': String. Expediente Electrónico (Clave para auditoría).
 
-    REGLAS DE OPERACIÓN:
-    1. Si te piden "Total" o "Suma", calcula la suma de 'COSTO' aplicando los filtros necesarios.
-    2. Si te piden filtrar por texto (ej: "Eventos en Cordoba"), usa: df[df['LUGAR'].str.contains('Cordoba', case=False, na=False)].
-    3. Si el resultado es una tabla o lista larga, resume diciendo "Hay X registros, los primeros son...".
-    4. NO inventes datos. Si el filtro devuelve vacío, dilo explícitamente.
+    REGLAS DE OPERACIÓN OBLIGATORIAS (AUDITORÍA):
+    1. **Transparencia de Volumen:** SIEMPRE que des un resultado numérico (suma, promedio, conteo), debes decir cuántos registros (filas) usaste para el cálculo. 
+       - Mal: "El total es $50.000".
+       - Bien: "El total es $50.000 (calculado sobre 5 eventos en Córdoba)".
+    
+    2. **Citas de Fuentes:** Si la respuesta involucra pocos registros (menos de 5), lista sus 'EE' o 'MOTIVO / EVENTO' para que el usuario pueda verificar.
+       - Ej: "...correspondientes a los eventos: 'Viaje A' y 'Congreso B'".
+
+    3. **Manejo de Ceros:** Si el filtro no devuelve nada o el costo es 0, aclara explícitamente: "No encontré registros con costo para ese criterio".
+
+    4. **Filtros de Texto:** Usa `str.contains(..., case=False, na=False)` para ser flexible con mayúsculas/minúsculas.
     """
 
     return create_pandas_dataframe_agent(
@@ -124,9 +131,11 @@ def analista_de_datos_cliente(consulta: str):
         # Extraemos el "Pensamiento" (el código python que ejecutó) para darle contexto al Agente Principal
         contexto_ejecucion = ""
         if pasos:
-            contexto_ejecucion = "\n\n--- EVIDENCIA DEL CÁLCULO (Código Ejecutado) ---\n"
+            contexto_ejecucion = "\n\n--- EVIDENCIA TÉCNICA (AUDITORÍA) ---\n"
             for action, observation in steps_summary(pasos):
-                contexto_ejecucion += f"🔹 Acción: {action}\n🔸 Resultado Parcial: {observation}\n"
+                # Limpiamos un poco el código para que no sea tan ruidoso
+                codigo_limpio = action.replace("df = df.copy()", "").strip()
+                contexto_ejecucion += f"🔹 Operación: {codigo_limpio}\n🔸 Resultado: {observation}\n"
         
         return f"{output_final}{contexto_ejecucion}"
 
@@ -140,8 +149,8 @@ def steps_summary(steps):
     for action, observation in steps:
         # Limpiamos el output de observación si es muy largo (ej: un dataframe entero)
         obs_str = str(observation)
-        if len(obs_str) > 200:
-            obs_str = obs_str[:200] + "... (truncado)"
+        if len(obs_str) > 300:
+            obs_str = obs_str[:300] + "... (truncado por longitud)"
         
         # action es un objeto AgentAction, action.tool_input suele ser el código python
         code = getattr(action, 'tool_input', str(action))
