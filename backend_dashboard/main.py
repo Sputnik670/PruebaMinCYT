@@ -7,6 +7,7 @@ from fastapi.responses import StreamingResponse  # <--- NUEVO: Para Streaming
 from pydantic import BaseModel, Field
 from typing import List, Optional, Generator
 
+
 from agents.main_agent import get_agent_response
 from tools.dashboard import (
     get_data_cliente_formatted,
@@ -17,6 +18,7 @@ from tools.dashboard import (
 from tools.docs import procesar_archivo_subido 
 from tools.audio import procesar_audio_gemini
 from tools.database import guardar_acta, obtener_historial_actas, borrar_acta
+from monitoring.session_manager import session_manager
 
 load_dotenv()
 
@@ -51,7 +53,9 @@ class Message(BaseModel):
 
 class ChatRequest(BaseModel):
     message: str = Field(..., min_length=1, max_length=4000)
-    history: Optional[List[Message]] = [] 
+    history: Optional[List[Message]] = []
+    session_id: Optional[str] = None  # ← NUEVO
+    user_id: str = "usuario_anonimo"  # ← NUEVO
 
 # --- ENDPOINTS GENERALES ---
 
@@ -62,30 +66,72 @@ def read_root():
 @app.post("/api/chat")
 async def chat_endpoint(request: ChatRequest):
     """
-    Endpoint optimizado para Streaming.
-    Permite que el frontend reciba la respuesta progresivamente.
+    Endpoint optimizado con Sistema de Sesiones Persistentes
     """
     async def generate_response_stream():
         try:
-            # Llamamos al agente. 
-            # NOTA: Para obtener el beneficio completo del streaming, 
-            # 'get_agent_response' en main_agent.py debería actualizarse para usar 'yield'.
-            # Este código es compatible con ambas versiones (string o generador).
-            respuesta = get_agent_response(request.message, request.history)
+            # 🆕 GESTIÓN DE SESIONES
+            session_id = request.session_id
+            if not session_id:
+                # Crear nueva sesión automáticamente
+                titulo_sesion = f"Chat: {request.message[:30]}..."
+                session_id = session_manager.crear_nueva_sesion(request.user_id, titulo_sesion)
+                # Informar al frontend del nuevo session_id
+                yield f"data: SESSION_ID:{session_id}\n\n"
+            
+            # 🆕 RECUPERAR HISTORIAL DE SESIÓN
+            historial_previo = []
+            if not request.history:
+                # Si no hay historial en la request, obtenerlo de la BD
+                historial_bd = session_manager.obtener_historial_sesion(session_id, limite=10)
+                
+                # Convertir formato BD → formato Message
+                for msg in historial_bd:
+                    if msg.get('mensaje_usuario'):
+                        historial_previo.append(Message(
+                            id=f"user_{msg['id']}",
+                            text=msg['mensaje_usuario'],
+                            sender="user",
+                            timestamp=msg['timestamp']
+                        ))
+                    if msg.get('respuesta_bot'):
+                        historial_previo.append(Message(
+                            id=f"bot_{msg['id']}",
+                            text=msg['respuesta_bot'],
+                            sender="assistant",
+                            timestamp=msg['timestamp']
+                        ))
+            else:
+                historial_previo = request.history
+
+            # Llamar al agente con historial completo
+            respuesta = get_agent_response(request.message, historial_previo)
+            
+            # Manejar streaming y capturar respuesta completa
+            respuesta_completa = ""
             
             if hasattr(respuesta, '__iter__') and not isinstance(respuesta, str):
-                # Si el agente ya soporta streaming real (es un generador)
+                # Streaming response
                 for chunk in respuesta:
-                    yield chunk
+                    respuesta_completa += chunk
+                    yield f"data: {chunk}\n\n"
             else:
-                # Si el agente devuelve todo el texto de una vez (legacy)
-                yield respuesta
+                # Respuesta completa
+                respuesta_completa = respuesta
+                yield f"data: {respuesta}\n\n"
+            
+            # 🆕 GUARDAR LA CONVERSACIÓN
+            session_manager.guardar_mensaje(
+                sesion_id=session_id,
+                mensaje_usuario=request.message,
+                respuesta_bot=respuesta_completa,
+                herramientas_usadas=[]  # TODO: capturar desde el agente
+            )
 
         except Exception as e:
             logger.error(f"❌ Error crítico en chat_endpoint: {str(e)}", exc_info=True)
-            yield f"Error del sistema: {str(e)}"
+            yield f"data: Error del sistema: {str(e)}\n\n"
 
-    # Retornamos un StreamingResponse con media_type text/plain para facilitar la lectura en el frontend
     return StreamingResponse(generate_response_stream(), media_type="text/plain")
 
 # --- ENDPOINTS DE DATOS (AGENDA) ---
@@ -153,6 +199,28 @@ def upload_audio_endpoint(background_tasks: BackgroundTasks, file: UploadFile = 
     except Exception as e:
         logger.error(f"Error procesando audio: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+    
+    # --- ENDPOINTS DE SESIONES ---
+
+@app.get("/api/sesiones/{user_id}")
+def get_sesiones_usuario(user_id: str):
+    """Obtener historial de sesiones de un usuario"""
+    try:
+        sesiones = session_manager.listar_sesiones_usuario(user_id, limite=20)
+        return {"sesiones": sesiones}
+    except Exception as e:
+        logger.error(f"Error obteniendo sesiones: {e}")
+        return {"sesiones": []}
+
+@app.get("/api/sesiones/{sesion_id}/historial")
+def get_historial_sesion(sesion_id: str):
+    """Obtener historial detallado de una sesión"""
+    try:
+        historial = session_manager.obtener_historial_sesion(sesion_id, limite=50)
+        return {"historial": historial}
+    except Exception as e:
+        logger.error(f"Error obteniendo historial: {e}")
+        return {"historial": []}
 
 # --- ENDPOINTS DE ACTAS ---
 

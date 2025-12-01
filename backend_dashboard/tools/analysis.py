@@ -71,6 +71,19 @@ def crear_agente_pandas():
         max_retries=2
     )
     
+    # --- FUNCIÓN DE RECUPERACIÓN DE ERRORES ---
+    def handle_parsing_error(error):
+        """
+        Si el LLM responde bien pero el parser de LangChain falla (OutputParserException),
+        esta función intenta extraer la respuesta final del mensaje de error.
+        """
+        str_error = str(error)
+        response_key = "Could not parse LLM output: `"
+        if response_key in str_error:
+            # Extraemos lo que está entre las comillas invertidas del error
+            return str_error.split(response_key)[-1].split("`")[0]
+        return f"Error procesando la respuesta: {str_error}"
+
     # --- PROMPT DE INGENIERÍA DE DATOS (MEJORADO: AUDITABILIDAD) ---
     prompt_prefix = """
     Eres un Analista de Datos Senior del MinCYT. Trabajas con un DataFrame de Pandas `df`.
@@ -94,6 +107,8 @@ def crear_agente_pandas():
     3. **Manejo de Ceros:** Si el filtro no devuelve nada o el costo es 0, aclara explícitamente: "No encontré registros con costo para ese criterio".
 
     4. **Filtros de Texto:** Usa `str.contains(..., case=False, na=False)` para ser flexible con mayúsculas/minúsculas.
+    
+    IMPORTANTE: Tu respuesta final debe ser clara y directa.
     """
 
     return create_pandas_dataframe_agent(
@@ -101,9 +116,12 @@ def crear_agente_pandas():
         df,
         verbose=True,
         allow_dangerous_code=True,
-        handle_parsing_errors=True,
+        # Usamos la función personalizada en lugar de solo True
+        handle_parsing_errors=handle_parsing_error,
         return_intermediate_steps=True, # <--- CLAVE: Permite ver el razonamiento (código generado)
-        prefix=prompt_prefix
+        prefix=prompt_prefix,
+        # Refuerzo para el ejecutor del agente
+        agent_executor_kwargs={"handle_parsing_errors": handle_parsing_error}
     )
 
 @tool

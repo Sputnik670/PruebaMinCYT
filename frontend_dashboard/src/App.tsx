@@ -5,21 +5,25 @@ import { MeetingRecorder } from './components/MeetingRecorder';
 import { MeetingHistory } from './components/MeetingHistory'; 
 import { LayoutDashboard, RefreshCw, Eye, EyeOff, Bot, FileAudio, Building2, Briefcase } from 'lucide-react';
 
-// Configuración de red
+// Configuración de red segura
 const rawUrl = import.meta.env.VITE_BACKEND_URL || "http://127.0.0.1:8000";
 const API_URL = rawUrl.replace(/\/api\/?$/, "").replace(/\/$/, "");
 
+// Definimos tipos para el estado
+type VistaType = 'cliente' | 'ministerio';
+type TabType = 'recorder' | 'history';
+
 function App() {
-  // Estado de los datos
-  const [dataMinisterio, setDataMinisterio] = useState([]);
-  const [dataCliente, setDataCliente] = useState([]);
+  // Estado de los datos con tipado
+  const [dataMinisterio, setDataMinisterio] = useState<any[]>([]);
+  const [dataCliente, setDataCliente] = useState<any[]>([]);
   
-  // Estado de la vista ('cliente' | 'ministerio')
-  const [vistaActual, setVistaActual] = useState('cliente'); 
+  // Estado de la vista
+  const [vistaActual, setVistaActual] = useState<VistaType>('cliente'); 
 
   const [syncing, setSyncing] = useState(false);
   const [mostrarTabla, setMostrarTabla] = useState(true);
-  const [activeTab, setActiveTab] = useState('recorder'); 
+  const [activeTab, setActiveTab] = useState<TabType>('recorder'); 
   const [refreshTrigger, setRefreshTrigger] = useState(0);
 
   const handleUploadSuccess = () => {
@@ -171,7 +175,7 @@ function App() {
                     </div>
                     <div>
                         <h2 className="text-sm font-semibold text-slate-100">Asistente MinCYT</h2>
-                        <p className="text-xs text-blue-400">En línea • Gemini 2.5 Flash</p>
+                        <p className="text-xs text-blue-400">En línea • Gemini 1.5 Flash</p>
                     </div>
                 </div>
                 <div className="flex space-x-1">

@@ -6,9 +6,19 @@ from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGener
 
 logger = logging.getLogger(__name__)
 
-# Configuración
+# --- CONFIGURACIÓN DE SUPABASE ---
 url: str = os.environ.get("SUPABASE_URL")
-key: str = os.environ.get("SUPABASE_KEY")
+
+# LÓGICA DE SEGURIDAD:
+# Intentamos obtener primero la 'SERVICE_ROLE_KEY' (permisos totales, ideal para el backend).
+# Si no existe, usamos 'SUPABASE_KEY' (que podría ser la anon key, limitada por RLS).
+key: str = os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or os.environ.get("SUPABASE_KEY")
+
+if not url or not key:
+    logger.error("❌ ERROR CRÍTICO: Faltan las credenciales de Supabase (URL o KEY).")
+    # Es preferible que falle aquí a que intente conectar con None
+    raise ValueError("Configuración de Supabase incompleta.")
+
 supabase: Client = create_client(url, key)
 
 # Modelo de embeddings
