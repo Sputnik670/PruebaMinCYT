@@ -1,37 +1,36 @@
 // src/services/geminiService.ts
 
-// [NUEVA LÍNEA] Importamos el tipo Message
 import { Message } from '../types/types'; 
 
-// Configuración robusta: Elimina barras extra o '/api' al final para evitar errores de ruta
+// Configuración robusta de la URL
 const rawUrl = import.meta.env.VITE_BACKEND_URL || "http://localhost:8000";
 const API_URL = rawUrl.replace(/\/api\/?$/, "").replace(/\/$/, "");
 
 // --- FUNCIÓN 1: CHAT DE TEXTO ---
-// MODIFICACIÓN: ACEPTA 'history' como arreglo de Message
 export const sendMessageToGemini = async (message: string, history: Message[]) => {
   
-  // [NUEVO] Serialización del historial para enviarlo como JSON
+  // [CORRECCIÓN] Ahora incluimos el 'id' en la serialización
   const serializedHistory = history.map(msg => ({
+    id: msg.id, // <--- ESTO FALTABA Y CAUSABA EL ERROR 422
     text: msg.text,
     sender: msg.sender,
-    // Usamos toISOString para enviar la fecha como string serializable
     timestamp: msg.timestamp.toISOString(), 
   }));
 
   try {
-    // Nota: Mantenemos /api/chat porque así lo definiste en main.py
     const response = await fetch(`${API_URL}/api/chat`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
-      // [MODIFICADO] Incluye el mensaje y el historial serializado
       body: JSON.stringify({ message: message, history: serializedHistory }), 
     });
 
     if (!response.ok) {
-      throw new Error(`Error del servidor: ${response.status}`);
+      // Intentamos leer el detalle del error del servidor si existe
+      const errorData = await response.json().catch(() => ({}));
+      console.error("Detalle del error del servidor:", errorData);
+      throw new Error(`Error del servidor: ${response.status} - ${JSON.stringify(errorData)}`);
     }
 
     const data = await response.json();
@@ -43,7 +42,6 @@ export const sendMessageToGemini = async (message: string, history: Message[]) =
 };
 
 // --- FUNCIÓN 2: ENVIAR AUDIO (VOZ) ---
-// [CORREGIDA PARA COINCIDIR CON EL BACKEND]
 export const sendAudioToGemini = async (audioBlob: Blob) => {
   const formData = new FormData();
   formData.append('file', audioBlob, 'recording.webm');
@@ -51,7 +49,6 @@ export const sendAudioToGemini = async (audioBlob: Blob) => {
   try {
     console.log(`Enviando audio a: ${API_URL}/upload-audio/`);
     
-    // CAMBIO AQUÍ: Apuntamos a /upload-audio/ en lugar de /api/voice
     const response = await fetch(`${API_URL}/upload-audio/`, {
       method: 'POST',
       body: formData,
@@ -63,7 +60,6 @@ export const sendAudioToGemini = async (audioBlob: Blob) => {
     }
 
     const data = await response.json();
-    // CAMBIO AQUÍ: El backend nuevo devuelve "transcripcion", no "text"
     return data.transcripcion || "Transcripción no disponible."; 
     
   } catch (error) {
@@ -78,7 +74,6 @@ export const uploadFile = async (file: File) => {
   formData.append('file', file);
 
   try {
-    // Nota: Mantenemos /api/upload
     const response = await fetch(`${API_URL}/api/upload`, {
       method: 'POST',
       body: formData,
