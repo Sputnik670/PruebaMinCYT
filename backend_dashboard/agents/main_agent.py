@@ -1,4 +1,5 @@
 import os
+import logging
 from datetime import datetime
 import locale
 from typing import List, Dict, Any, Union
@@ -24,6 +25,9 @@ from tools.dashboard import (
 
 # --- NUEVO IMPORT: El Cerebro Matemático ---
 from tools.analysis import analista_de_datos_cliente 
+
+# Configuración de Logging
+logger = logging.getLogger(__name__)
 
 # 1. Configuración del Modelo
 # CORRECCIÓN: Usamos el nombre correcto del modelo (gemini-1.5-flash-001)
@@ -150,7 +154,7 @@ agent = AgentExecutor(
 # [MODIFICADO] Función actualizada para aceptar el historial
 def get_agent_response(user_message: str, chat_history: List[Any] = []):
     try:
-        print(f"🤖 Pitu Procesando ({fecha_actual}): {user_message}")
+        logger.info(f"🤖 Pitu Procesando ({fecha_actual}): {user_message}")
         
         # 1. Convertir el historial crudo en texto para el prompt
         history_text = format_chat_history(chat_history)
@@ -162,5 +166,5 @@ def get_agent_response(user_message: str, chat_history: List[Any] = []):
         })
         return response["output"]
     except Exception as e:
-        print(f"❌ Error Agente: {str(e)}")
+        logger.error(f"❌ Error Agente: {str(e)}", exc_info=True)
         return f"Disculpa, hubo un error técnico al procesar tu solicitud: {str(e)}"

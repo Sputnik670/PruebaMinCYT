@@ -2,18 +2,18 @@
 
 import { Message } from '../types/types'; 
 
-// Configuración robusta de la URL
-const rawUrl = import.meta.env.VITE_BACKEND_URL || "http://localhost:8000";
+// Configuración robusta de la URL (Estandarizada a 127.0.0.1 para evitar problemas de DNS/IPv6)
+const rawUrl = import.meta.env.VITE_BACKEND_URL || "http://127.0.0.1:8000";
 const API_URL = rawUrl.replace(/\/api\/?$/, "").replace(/\/$/, "");
 
 // --- FUNCIÓN 1: CHAT DE TEXTO CON STREAMING ---
 export const sendMessageToGemini = async (
   message: string, 
   history: Message[], 
-  onStreamUpdate: (chunk: string) => void // <--- NUEVO: Callback para ir enviando el texto
+  onStreamUpdate: (chunk: string) => void // Callback para ir enviando el texto
 ) => {
   
-  // [CORRECCIÓN] Serialización correcta con ID
+  // Serialización correcta con ID
   const serializedHistory = history.map(msg => ({
     id: msg.id,
     text: msg.text,
