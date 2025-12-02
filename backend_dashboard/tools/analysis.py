@@ -99,33 +99,29 @@ def crear_agente_pandas():
 
     llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0)
     
-    # --- PROMPT CORREGIDO PARA EVITAR FILTRADO INCORRECTO ---
+    # --- PROMPT EXPANDIDO CON REGLAS DE NEGOCIO ---
     prompt_prefix = """
     Estás trabajando con un DataFrame de Pandas 'df'.
     
-    CONTEXTO DE DATOS (IMPORTANTE):
-    1. Este 'df' contiene TODOS los datos de la 'Agenda de Gestión Interna' (o Cliente).
-    2. Si el usuario pregunta por "gestión interna", "agenda", "total" o "general", NO FILTRES por texto. Usa TODAS las filas.
-    3. SOLO filtra si el usuario pide un MES, AÑO, LUGAR o TIPO DE EVENTO específico (ej: "gastos de viáticos").
+    1. CONTEXTO GENERAL:
+       - Este 'df' contiene la 'Agenda de Gestión Interna'.
+       - Si preguntan por "total", "agenda" o "gestión interna" a secas -> USA TODAS LAS FILAS (no filtres).
 
-    Estructura de columnas clave:
-    - 'MONEDA': La divisa (ARS, USD, EUR).
-    - 'MONTO': El valor numérico (float).
-    - 'MOTIVO / EVENTO': Descripción.
-    - 'MES' y 'ANIO': Enteros para filtrar fechas.
+    2. MAPEO DE COLUMNAS (Diccionario de Negocio):
+       - Si preguntan por "Institución" u "Organismo" -> Usa la columna 'INSTITUCIÓN'.
+       - Si preguntan por "Destino", "Ciudad" o "Viajes a..." -> Usa la columna 'LUGAR'.
+       - Si preguntan por "Estado" o "Pendientes" -> Usa la columna 'ESTADO' o 'RENDICIÓN'.
+       - Si preguntan por "Fecha" o "Mes" -> Usa las columnas 'MES' y 'ANIO'.
 
-    TU MISIÓN: Calcular costos totales agrupados por moneda.
+    3. REGLAS DE FILTRADO INTELIGENTE:
+       - Filtro por TEXTO (Lugar/Evento/Institución): Usa siempre `str.contains('texto', case=False, na=False)`.
+       - Filtro por FECHA: Si piden "marzo", filtra `df['MES'] == 3`.
+       - Filtro por MONEDA: Siempre agrupa los resultados finales por 'MONEDA'.
 
-    PASOS OBLIGATORIOS (Código Python):
-    1. Define 'df_filtered'. Si la consulta es general, df_filtered = df. Si es específica, aplica filtros.
-    2. Agrupa 'df_filtered' por 'MONEDA' y suma 'MONTO'.
-    3. Imprime el resultado.
-
-    FORMATO DE SALIDA ESTRICTO:
-    Debes responder **EXACTAMENTE** con este formato (reemplaza X, Y, Z por los números):
-    "el costo es = EURO: X Y DOLAR: Y Y PESOS: Z"
-    
-    Si una moneda es 0, no la incluyas. NO escribas código en la respuesta final.
+    4. FORMATO DE SALIDA OBLIGATORIO:
+       - Responde EXACTAMENTE con este formato para los totales:
+         "el costo es = EURO: X Y DOLAR: Y Y PESOS: Z"
+       - Si el usuario pidió un detalle (ej: "lista de viajes"), puedes listar las primeras 5 filas antes del total.
     """
 
     return create_pandas_dataframe_agent(
@@ -133,10 +129,9 @@ def crear_agente_pandas():
         df, 
         verbose=True, 
         allow_dangerous_code=True,
-        # CAMBIO 1: Simplificamos pasos intermedios para limpiar la salida
         return_intermediate_steps=False,
         prefix=prompt_prefix,
-        # CAMBIO 2: Pasamos el parámetro DENTRO de agent_executor_kwargs para evitar el UserWarning
+        # Pasamos el parámetro DENTRO de agent_executor_kwargs para evitar el UserWarning
         agent_executor_kwargs={"handle_parsing_errors": True}
     )
 
