@@ -99,9 +99,15 @@ def crear_agente_pandas():
 
     llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0)
     
-    # PROMPT MEJORADO PARA FORZAR EL FORMATO Y LA LÓGICA
+    # --- PROMPT CORREGIDO PARA EVITAR FILTRADO INCORRECTO ---
     prompt_prefix = """
     Estás trabajando con un DataFrame de Pandas 'df'.
+    
+    CONTEXTO DE DATOS (IMPORTANTE):
+    1. Este 'df' contiene TODOS los datos de la 'Agenda de Gestión Interna' (o Cliente).
+    2. Si el usuario pregunta por "gestión interna", "agenda", "total" o "general", NO FILTRES por texto. Usa TODAS las filas.
+    3. SOLO filtra si el usuario pide un MES, AÑO, LUGAR o TIPO DE EVENTO específico (ej: "gastos de viáticos").
+
     Estructura de columnas clave:
     - 'MONEDA': La divisa (ARS, USD, EUR).
     - 'MONTO': El valor numérico (float).
@@ -110,17 +116,16 @@ def crear_agente_pandas():
 
     TU MISIÓN: Calcular costos totales agrupados por moneda.
 
-    PASOS OBLIGATORIOS (Ejecuta código Python):
-    1. Filtra el 'df' según lo que pida el usuario (mes, evento, etc).
-    2. Agrupa por 'MONEDA' y suma la columna 'MONTO'.
-    3. Imprime el resultado del agrupamiento.
+    PASOS OBLIGATORIOS (Código Python):
+    1. Define 'df_filtered'. Si la consulta es general, df_filtered = df. Si es específica, aplica filtros.
+    2. Agrupa 'df_filtered' por 'MONEDA' y suma 'MONTO'.
+    3. Imprime el resultado.
 
     FORMATO DE SALIDA ESTRICTO:
     Debes responder **EXACTAMENTE** con este formato (reemplaza X, Y, Z por los números):
     "el costo es = EURO: X Y DOLAR: Y Y PESOS: Z"
     
-    Si una moneda es 0, no la incluyas.
-    NO escribas código en la respuesta final, solo la frase formateada.
+    Si una moneda es 0, no la incluyas. NO escribas código en la respuesta final.
     """
 
     return create_pandas_dataframe_agent(
@@ -128,11 +133,10 @@ def crear_agente_pandas():
         df, 
         verbose=True, 
         allow_dangerous_code=True,
-        # CAMBIO 1: Simplificamos pasos intermedios
+        # CAMBIO 1: Simplificamos pasos intermedios para limpiar la salida
         return_intermediate_steps=False,
         prefix=prompt_prefix,
-        # CAMBIO 2: Pasamos el parámetro DENTRO de agent_executor_kwargs
-        # Esto soluciona el UserWarning y hace que LangChain realmente capture el error.
+        # CAMBIO 2: Pasamos el parámetro DENTRO de agent_executor_kwargs para evitar el UserWarning
         agent_executor_kwargs={"handle_parsing_errors": True}
     )
 
