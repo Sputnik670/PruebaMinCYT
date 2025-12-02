@@ -138,8 +138,9 @@ def crear_agente_pandas():
 @tool
 def analista_de_datos_cliente(consulta: str):
     """
-    Calculadora financiera OFICIAL.
-    Úsala SIEMPRE que el usuario pregunte por 'costos', 'presupuesto', 'cuánto se gastó', 'suma de gastos'.
+    Herramienta AVANZADA de GESTIÓN INTERNA. 
+    Especialista en: CÁLCULOS MATEMÁTICOS, sumas de costos, filtros complejos (por mes, por moneda, por estado) y reportes financieros.
+    Usa esta herramienta si la pregunta requiere procesar números o filtrar la agenda interna con precisión.
     """
     try:
         agent = crear_agente_pandas()

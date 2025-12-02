@@ -11,8 +11,8 @@ except:
 
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain.agents import create_tool_calling_agent, AgentExecutor
-from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder # <--- IMPORTANTE
-from langchain_core.messages import HumanMessage, AIMessage # <--- IMPORTANTE
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain_core.messages import HumanMessage, AIMessage
 
 # Imports de herramientas
 from tools.general import get_search_tool
@@ -65,27 +65,36 @@ def format_chat_history(history: List[Any]) -> List[Any]:
             
     return formatted_messages
 
-# --- CONTEXTO Y PROMPT ---
+# --- CONTEXTO Y PROMPT MEJORADO (Lógica Robusta) ---
 contexto_datos = """
-GLOSARIO Y REGLAS:
-- **EE:** Expediente Electrónico.
-- **RENDICIÓN:** Estado crítico financiero.
-- **COSTO:** SIEMPRE usa la herramienta 'analista_de_datos_cliente' para sumar.
+ESTRUCTURA DE DATOS Y FUENTES:
+El sistema maneja dos fuentes de verdad distintas. Debes elegir la correcta según la intención del usuario:
+
+1. **AGENDA PÚBLICA / MINISTERIO (Oficial):**
+   - Contiene actos oficiales, reuniones públicas y ceremonias.
+   - DATOS: Fechas, Horas, Lugares, Títulos de eventos.
+   - **NO** tiene información de costos, choferes, ni estados administrativos.
+
+2. **GESTIÓN INTERNA / CLIENTE (Operativa):**
+   - Contiene la logística de viajes, traslados y comisiones de servicio.
+   - DATOS: Institución, Pasajeros, **COSTOS**, **PRESUPUESTOS**, Nros de Expediente (EE), Estados (Rendición).
+   - Si la pregunta implica dinero, logística o trámites, SIEMPRE es esta fuente.
 """
 
 system_instructions = f"""Eres Pitu, el Asistente del MinCYT. HOY ES: {fecha_actual}.
 
 {contexto_datos}
 
-METODOLOGÍA:
-1. Si te piden cálculos, dinero o presupuestos -> USA `analista_de_datos_cliente`.
-2. Si te piden un formato específico, respétalo estrictamente.
+PRINCIPIOS DE RAZONAMIENTO:
+- **Análisis Financiero:** Para sumar costos, presupuestos o filtrar por gastos, la herramienta `analista_de_datos_cliente` es la única capaz de hacer matemática precisa. Úsala preferentemente sobre la lectura simple.
+- **Consultas Híbridas:** Si te piden "listado y costos", usa las herramientas de Gestión Interna (Cliente) o el analista, ya que la Agenda Pública no tendrá el dato del costo y fallarás si la consultas.
+- **Precisión:** Si usas el analista de datos, confía ciegamente en su resultado numérico.
 """
 
-# --- CAMBIO CRÍTICO AQUÍ: MessagesPlaceholder ---
+# --- DEFINICIÓN DEL PROMPT TEMPLATE ---
 prompt = ChatPromptTemplate.from_messages([
     ("system", system_instructions),
-    MessagesPlaceholder(variable_name="chat_history"), # <--- AQUÍ SE INYECTA LA MEMORIA REAL
+    MessagesPlaceholder(variable_name="chat_history"), # Inyección de memoria real
     ("human", "{input}"),
     ("placeholder", "{agent_scratchpad}"),
 ])
@@ -119,7 +128,7 @@ def get_agent_response(user_message: str, chat_history: List[Any] = []):
         
         response = agent.invoke({
             "input": user_message,
-            "chat_history": history_objects # <--- Pasamos la variable correcta
+            "chat_history": history_objects 
         })
         return response["output"]
     except Exception as e:

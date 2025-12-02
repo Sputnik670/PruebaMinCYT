@@ -168,7 +168,7 @@ def obtener_datos_raw():
 
 # --- TOOLS DEL AGENTE (USANDO CACHÉ) ---
 
-# 1. NUEVA HERRAMIENTA DE VALIDACIÓN
+# 1. HERRAMIENTA DE VALIDACIÓN
 @tool
 def analizar_estructura_tablas(consulta: str):
     """
@@ -200,19 +200,22 @@ def analizar_estructura_tablas(consulta: str):
 
 @tool
 def consultar_calendario_ministerio(consulta: str):
-    """Consulta la agenda pública del ministerio."""
+    """
+    Útil SOLO para consultas sobre la AGENDA PÚBLICA u OFICIAL del Ministro.
+    Devuelve: Fechas, eventos institucionales y ubicaciones.
+    NO contiene costos ni logística interna.
+    """
     # Usamos la versión _cached
     raw = obtener_datos_sheet_cached(SHEET_MINISTERIO_ID, WORKSHEET_MINISTERIO_GID)
     return json.dumps([procesar_fila_ministerio(r) for r in raw])
 
 @tool
 def consultar_calendario_cliente(consulta: str):
-    """Consulta la agenda de gestión interna."""
+    """
+    Útil para listar eventos de la GESTIÓN INTERNA o LOGÍSTICA.
+    Devuelve: Fechas, pasajeros, destinos y motivos de viajes.
+    Ideal para ver 'qué hay agendado', pero NO realiza cálculos matemáticos complejos.
+    """
     # Usamos la versión _cached
     raw = obtener_datos_sheet_cached(SHEET_CLIENTE_ID, WORKSHEET_CLIENTE_GID)
     return json.dumps([procesar_fila_cliente(r) for r in raw])
-
-@tool
-def consultar_calendario(consulta: str):
-    """Consulta la agenda general.""" 
-    return consultar_calendario_ministerio(consulta)
