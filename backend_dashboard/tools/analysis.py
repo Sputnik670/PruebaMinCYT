@@ -49,7 +49,7 @@ def parse_money_value(valor):
         
     return moneda, monto
 
-# 2. FUNCIÓN DE EXTRACCIÓN DE FECHA (extraer_fecha_inteligente) - CORREGIDA
+# 2. FUNCIÓN DE EXTRACCIÓN DE FECHA (extraer_fecha_inteligente)
 def extraer_fecha_inteligente(valor):
     if not valor: return pd.NaT
     val_str = str(valor).strip()
@@ -128,9 +128,12 @@ def crear_agente_pandas():
         df, 
         verbose=True, 
         allow_dangerous_code=True,
-        return_intermediate_steps=True,
+        # CAMBIO 1: Simplificamos pasos intermedios
+        return_intermediate_steps=False,
         prefix=prompt_prefix,
-        handle_parsing_errors=True
+        # CAMBIO 2: Pasamos el parámetro DENTRO de agent_executor_kwargs
+        # Esto soluciona el UserWarning y hace que LangChain realmente capture el error.
+        agent_executor_kwargs={"handle_parsing_errors": True}
     )
 
 @tool
@@ -150,4 +153,5 @@ def analista_de_datos_cliente(consulta: str):
 
     except Exception as e:
         logger.error(f"Error analista: {e}")
-        return f"Error de cálculo: {e}"
+        # Si falla incluso con el manejo de errores, devolvemos un mensaje amigable
+        return f"Error de cálculo (intenta reformular): {e}"

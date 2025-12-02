@@ -4,7 +4,7 @@ import logging
 from dotenv import load_dotenv
 from supabase import create_client
 from tools.dashboard import obtener_datos_sheet_cached, SHEET_CLIENTE_ID, WORKSHEET_CLIENTE_GID, procesar_fila_cliente
-from tools.analysis import normalizar_dinero  # Usamos tu función actual
+from tools.analysis import parse_money_value  # <--- CORRECCIÓN DE IMPORTE
 
 # Cargar entorno
 load_dotenv()
@@ -21,6 +21,14 @@ print("="*50 + "\n")
 print("👉 1. VERIFICANDO MEMORIA (SUPABASE)...")
 url = os.getenv("SUPABASE_URL")
 key = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_KEY")
+
+# <--- LÓGICA DE DEBUG PARA LA CLAVE RECHAZADA --->
+if key:
+    # Imprime los primeros 5 caracteres y la longitud para asegurar que se leyó la clave completa
+    print(f"   Key leída (Longitud: {len(key)}, Inicio: {key[:5]}...)") 
+else:
+    print("   Key leída: VACÍA") 
+# <--- FIN LÓGICA DE DEBUG --->
 
 if not url or not key:
     print("❌ ERROR: Faltan credenciales en .env")
@@ -78,7 +86,7 @@ try:
         df = pd.DataFrame(data_limpia)
         
         print("\n🔎 ESTRUCTURA DE TUS DATOS (Primeras 3 filas):")
-        cols_clave = ['FECHA', 'MOTIVO / EVENTO', 'COSTO', 'COSTO_ORIGINAL']
+        cols_clave = ['FECHA', 'MOTIVO / EVENTO', 'COSTO']
         # Mostramos solo las que existan
         cols_existentes = [c for c in cols_clave if c in df.columns] or df.columns[:5]
         
@@ -88,23 +96,28 @@ try:
         if 'COSTO' in df.columns:
             # Tomamos 5 valores de ejemplo no vacíos
             ejemplos = df[df['COSTO'].astype(str).str.len() > 2]['COSTO'].head(5).tolist()
+            if not ejemplos:
+                 print("⚠️ No hay valores de costo no vacíos para probar.")
             for val in ejemplos:
-                resultado = normalizar_dinero(val)
-                print(f"   Original: '{val}'  ->  Limpio (ARS): ${resultado:,.2f}")
+                moneda, monto = parse_money_value(val)
+                print(f"   Original: '{val}'  ->  Limpio ({moneda}): ${monto:,.2f}")
+                
         else:
             print("❌ ERROR CRÍTICO: No encuentro la columna 'COSTO' ni parecida.")
             print("   Columnas detectadas:", df.columns.tolist())
 
         print("\n📅 PRUEBA DE FECHAS:")
         if 'FECHA' in df.columns:
-            df['FECHA_DT'] = pd.to_datetime(df['FECHA'], errors='coerce', dayfirst=True)
+            # Se usa errors='coerce' y dayfirst=True para intentar manejar formatos variados
+            df['FECHA_DT'] = pd.to_datetime(df['FECHA'], errors='coerce', dayfirst=True) 
             nulos = df['FECHA_DT'].isna().sum()
             validos = df['FECHA_DT'].notna().sum()
             print(f"   Fechas válidas: {validos} | Fechas inválidas (NaT): {nulos}")
             if validos > 0:
                 print(f"   Ejemplo válida: {df.loc[df['FECHA_DT'].notna(), 'FECHA'].iloc[0]} -> {df.loc[df['FECHA_DT'].notna(), 'FECHA_DT'].iloc[0]}")
             if nulos > 0:
-                print(f"   Ejemplo inválida: {df.loc[df['FECHA_DT'].isna(), 'FECHA'].iloc[0]}")
+                # Muestra la primera fecha que no se pudo parsear para ayudar al debug
+                print(f"   Ejemplo inválida: {df.loc[df['FECHA_DT'].isna(), 'FECHA'].iloc[0]}") 
         
 except Exception as e:
     print(f"❌ Error procesando datos: {e}")

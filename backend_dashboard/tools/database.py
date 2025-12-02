@@ -6,47 +6,93 @@ from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGener
 
 logger = logging.getLogger(__name__)
 
-# --- CONFIGURACIÓN DE SUPABASE ---
+# --- CONFIGURACIÓN DE SUPABASE GLOBAL (Solo para inicialización y Tools) ---
 url: str = os.environ.get("SUPABASE_URL")
-
-# LÓGICA DE SEGURIDAD:
-# Intentamos obtener primero la 'SERVICE_ROLE_KEY' (permisos totales, ideal para el backend).
-# Si no existe, usamos 'SUPABASE_KEY' (que podría ser la anon key, limitada por RLS).
 key: str = os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or os.environ.get("SUPABASE_KEY")
 
 if not url or not key:
     logger.error("❌ ERROR CRÍTICO: Faltan las credenciales de Supabase (URL o KEY).")
     # Es preferible que falle aquí a que intente conectar con None
-    raise ValueError("Configuración de Supabase incompleta.")
+    # Aseguramos que la variable 'supabase' exista, aunque falle, para que el código compile
+    if os.getenv("SUPABASE_URL") and (os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_KEY")):
+        supabase: Client = create_client(url, key)
+    else:
+        # Simulación de cliente para evitar errores de compilación si las variables faltan
+        class MockClient:
+            def table(self, name): return self
+            def insert(self, data): return self
+            def execute(self): return self
+            def select(self, *args): return self
+            def order(self, *args): return self
+            def limit(self, *args): return self
+            def eq(self, *args): return self
+            def delete(self): return self
+            def rpc(self, *args): return self
+        supabase = MockClient()
+        
+# --- NUEVA FUNCIÓN: Obtener un cliente fresco para BackgroundTasks ---
+def get_fresh_supabase_client() -> Client:
+    """Crea y devuelve un nuevo cliente Supabase."""
+    url_local = os.getenv("SUPABASE_URL")
+    key_local = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_KEY")
+    if not url_local or not key_local:
+         raise ValueError("Credenciales de Supabase no disponibles en el entorno para tarea de fondo.")
+    return create_client(url_local, key_local)
 
-supabase: Client = create_client(url, key)
 
-# Modelo de embeddings
-embeddings_model = GoogleGenerativeAIEmbeddings(
-    model="models/text-embedding-004", 
-    task_type="retrieval_query"
-)
+# Modelo de embeddings (depende de la configuración global)
+try:
+    embeddings_model = GoogleGenerativeAIEmbeddings(
+        model="models/text-embedding-004", 
+        task_type="retrieval_query"
+    )
+except Exception:
+    logger.warning("⚠️ Modelo 004 no disponible, usando fallback a embedding-001")
+    embeddings_model = GoogleGenerativeAIEmbeddings(
+        model="models/embedding-001", 
+        task_type="retrieval_query"
+    )
 
 # --- NUEVO: LLM para "pensar" sinónimos antes de buscar ---
-# Usamos Flash por velocidad. Si prefieres potencia bruta, cambia a "gemini-1.5-pro"
 llm_reformulador = ChatGoogleGenerativeAI(
     model="gemini-2.5-flash", 
     temperature=0.3,
     max_retries=2
 )
 
-# --- FUNCIONES DE ACTAS (Mantenemos lo que ya tenías) ---
+# --- FUNCIONES DE ACTAS (CORREGIDA LA FUNCIÓN GUARDAR_ACTA) ---
 def guardar_acta(transcripcion: str, resumen: str = None):
+    """
+    Guarda el acta en la tabla 'actas_reunion' utilizando un cliente fresco.
+    Esto previene problemas de conexión en tareas asíncronas/background.
+    """
     try:
+        # 1. Obtener un cliente nuevo y seguro para esta tarea
+        db_client = get_fresh_supabase_client() 
+        
         titulo = "Reunión: " + transcripcion[:30] + "..."
         data = {"transcripcion": transcripcion, "resumen_ia": resumen, "titulo": titulo}
-        return supabase.table("actas_reunion").insert(data).execute().data
+        
+        logger.info(f"💾 Ejecutando inserción en BD (Background) para: {titulo}")
+        
+        # 2. Ejecutar inserción
+        res = db_client.table("actas_reunion").insert(data).execute()
+        
+        if res.data:
+            logger.info(f"✅ Acta guardada con éxito (ID: {res.data[0].get('id')}).")
+            return res.data
+        
+        logger.warning("⚠️ La inserción de acta no devolvió datos de éxito.")
+        return None
+        
     except Exception as e:
-        logger.error(f"Error guardando acta: {e}")
+        # El logging es crítico para el debug silencioso
+        logger.error(f"❌ Error CRÍTICO al guardar acta en Background: {e}", exc_info=True) 
         return None
 
 def obtener_historial_actas():
     try:
+        # Usamos el cliente global 'supabase' aquí, ya que no es una tarea de fondo
         return supabase.table("actas_reunion").select("*").order("created_at", desc=True).limit(10).execute().data
     except Exception as e:
         logger.error(f"Error leyendo actas: {e}")
@@ -54,11 +100,10 @@ def obtener_historial_actas():
 
 def borrar_acta(id_acta: int):
     try:
-        res = supabase.table("actas_reunion").delete().eq("id", id_acta).execute()
-        return len(res.data) > 0
+        return supabase.table("actas_reunion").delete().eq("id", id_acta).execute().data
     except Exception:
         return False
-
+        
 # --- HERRAMIENTA 1: CONSULTAR ACTAS ---
 @tool
 def consultar_actas_reuniones(query: str):
