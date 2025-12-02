@@ -1,7 +1,7 @@
 import os
 import smtplib
 import logging
-import pandas as pd  # <--- ¡FALTABA ESTA LÍNEA!
+import pandas as pd
 from email.mime.text import MIMEText
 from datetime import datetime, timedelta
 from langchain.tools import tool
@@ -10,9 +10,7 @@ from googleapiclient.discovery import build
 
 logger = logging.getLogger(__name__)
 
-# ... (El resto del código sigue igual)
 # --- CONFIGURACIÓN CALENDAR ---
-# Scopes necesarios para escribir en el calendario
 SCOPES = ['https://www.googleapis.com/auth/calendar']
 
 def get_calendar_service():
@@ -26,7 +24,7 @@ def get_calendar_service():
 
         creds_dict = {
             "type": "service_account",
-            "project_id": "dashboard-impacto-478615", # Ajusta esto si cambia tu proyecto
+            "project_id": "dashboard-impacto-478615",
             "private_key_id": "indefinido",
             "private_key": private_key.replace("\\n", "\n"),
             "client_email": client_email,
@@ -60,25 +58,32 @@ def agendar_reunion_oficial(titulo: str, fecha_hora_inicio: str, duracion_minuto
 
     try:
         # 1. Parsear fechas
-        dt_inicio = pd.to_datetime(fecha_hora_inicio) # Usamos pandas que es robusto
+        dt_inicio = pd.to_datetime(fecha_hora_inicio)
         if pd.isna(dt_inicio): dt_inicio = datetime.now() + timedelta(days=1)
         
         dt_fin = dt_inicio + timedelta(minutes=duracion_minutos)
 
-        # 2. Construir evento
+        # 2. Construir descripción con invitados (Workaround para error 403)
+        descripcion = 'Reunión agendada automáticamente por Pitu (Asistente Virtual).'
+        if emails_invitados:
+            descripcion += f"\n\nInvitados propuestos: {emails_invitados}"
+
+        # 3. Construir evento
         event = {
-            'summary': f"[IA] {titulo}", # Tag [IA] para distinguir
-            'description': 'Reunión agendada automáticamente por Pitu (Asistente Virtual).',
+            'summary': f"[IA] {titulo}",
+            'description': descripcion,
             'start': {'dateTime': dt_inicio.isoformat(), 'timeZone': 'America/Argentina/Buenos_Aires'},
             'end': {'dateTime': dt_fin.isoformat(), 'timeZone': 'America/Argentina/Buenos_Aires'},
         }
 
-        if emails_invitados:
-            attendees = [{'email': email.strip()} for email in emails_invitados.split(',') if '@' in email]
-            if attendees: event['attendees'] = attendees
+        # --- CORRECCIÓN ERROR 403 ---
+        # Comentamos la invitación formal para evitar "Service accounts cannot invite attendees"
+        # if emails_invitados:
+        #    attendees = [{'email': email.strip()} for email in emails_invitados.split(',') if '@' in email]
+        #    if attendees: event['attendees'] = attendees
+        # ----------------------------
 
-        # 3. Insertar (Calendar ID 'primary' usa el email de la service account)
-        # Nota: Para que aparezca en TU calendario personal, debes compartir tu calendario con el client_email de la service account.
+        # 4. Insertar en el calendario objetivo
         calendar_id = os.getenv("CALENDAR_ID_TARGET", "primary") 
         
         created_event = service.events().insert(calendarId=calendar_id, body=event).execute()
@@ -94,7 +99,6 @@ def enviar_email_real(destinatario: str, asunto: str, cuerpo: str):
     """
     ENVÍA un correo electrónico real vía SMTP. Úsalo solo cuando el usuario confirme explícitamente el envío.
     """
-    # Configura estas vars en tu .env: SMTP_SERVER, SMTP_PORT, SMTP_USER, SMTP_PASSWORD
     smtp_server = os.getenv("SMTP_SERVER", "smtp.gmail.com")
     smtp_port = int(os.getenv("SMTP_PORT", "587"))
     smtp_user = os.getenv("SMTP_USER")
