@@ -2,7 +2,8 @@ import os
 import logging
 from datetime import datetime
 import locale
-from typing import List, Any
+from typing import List, Any, TypedDict, Annotated
+import operator
 
 # Configuración de Locale
 try:
@@ -11,10 +12,14 @@ except:
     pass
 
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain.agents import create_tool_calling_agent, AgentExecutor
+from langchain_core.messages import SystemMessage, HumanMessage, BaseMessage
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
-from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
-# --- NUEVOS IMPORTS PARA MEMORIA (MEJORA 2) ---
+
+# --- IMPORTS DE LANGGRAPH (NUEVA ARQUITECTURA) ---
+from langgraph.graph import StateGraph, END
+from langgraph.prebuilt import ToolNode
+
+# --- IMPORTS PARA MEMORIA ---
 from langchain.memory import ConversationSummaryBufferMemory
 from langchain_community.chat_message_histories import ChatMessageHistory
 
@@ -26,7 +31,9 @@ from tools.dashboard import (
     consultar_calendario_ministerio, 
     consultar_calendario_cliente
 )
-from tools.analysis import analista_de_datos_cliente 
+from tools.analysis import analista_de_datos_cliente
+# [CORRECCIÓN 1: Importar nuevas acciones de escritura]
+from tools.actions import agendar_reunion_oficial, enviar_email_real
 
 logger = logging.getLogger(__name__)
 
@@ -39,8 +46,8 @@ llm = ChatGoogleGenerativeAI(
 
 fecha_actual = datetime.now().strftime("%A %d de %B de %Y")
 
-# --- FUNCIÓN DE MEMORIA INTELIGENTE (MEJORA 2) ---
-def get_memory_aware_history(history_list: List[Any]) -> List[Any]:
+# --- FUNCIÓN DE MEMORIA INTELIGENTE ---
+def get_memory_aware_history(history_list: List[Any]) -> List[BaseMessage]:
     """
     Transforma la lista cruda de mensajes en una memoria optimizada.
     Si el historial es largo, RESUME los mensajes antiguos y mantiene los recientes.
@@ -51,7 +58,7 @@ def get_memory_aware_history(history_list: List[Any]) -> List[Any]:
     # 1. Reconstruir el historial en formato LangChain
     chat_history_obj = ChatMessageHistory()
     
-    # Excluimos el último (input actual) para no duplicarlo
+    # Excluimos el último (input actual) para no duplicarlo si viene en la lista
     history_to_process = history_list[:-1] 
 
     for msg in history_to_process:
@@ -69,7 +76,6 @@ def get_memory_aware_history(history_list: List[Any]) -> List[Any]:
             chat_history_obj.add_ai_message(text)
 
     # 2. Aplicar SummaryBufferMemory
-    # max_token_limit=1000: Si pasamos de ~1000 tokens, Gemini resume lo antiguo.
     memory = ConversationSummaryBufferMemory(
         llm=llm,
         chat_memory=chat_history_obj,
@@ -78,16 +84,17 @@ def get_memory_aware_history(history_list: List[Any]) -> List[Any]:
         memory_key="chat_history"
     )
 
-    # 3. Extraer los mensajes procesados (SystemMessage con Resumen + Mensajes Recientes)
+    # 3. Extraer los mensajes procesados
     final_history = memory.load_memory_variables({})["chat_history"]
     
     return final_history
 
-# --- SYSTEM PROMPT (MEJORA 1: Jerarquía) ---
+# --- SYSTEM PROMPT ---
+# [CORRECCIÓN 2: Actualizar instrucciones con capacidades de acción]
 system_instructions = f"""Eres Pitu, el Asistente Inteligente del MinCYT. 
 HOY ES: {fecha_actual}.
 
-TU MISIÓN: Responder consultas sobre la gestión del Ministerio con precisión absoluta.
+TU MISIÓN: Responder consultas sobre la gestión del Ministerio con precisión absoluta y ejecutar acciones administrativas cuando se solicite.
 
 ### 1. PROTOCOLO DE SELECCIÓN DE FUENTES (JERARQUÍA):
 
@@ -100,24 +107,23 @@ TU MISIÓN: Responder consultas sobre la gestión del Ministerio con precisión 
 
 **C. DOCUMENTOS / RESOLUCIONES (FALLBACK):**
    - Si no está en las agendas, usa: `consultar_biblioteca_documentos`.
+   - REGLA DE CITA: Si usas esta herramienta, termina tu frase con: [Fuente: Nombre del Documento].
 
 **D. MEMORIA DE REUNIONES:**
    - Usa: `consultar_actas_reuniones`.
 
 ### 2. REGLAS DE ORO:
 1. **CÁLCULOS:** NUNCA sumes mentalmente los datos de las listas. Usa SIEMPRE `analista_de_datos_cliente` para matemáticas.
-2. **HONESTIDAD:** Si no hay datos en ninguna fuente (Agenda ni Documentos), dilo claramente.
-3. **MEMORIA:** Tienes acceso a un resumen de la conversación anterior. Úsalo si el usuario dice "como te dije antes" o "sobre lo anterior".
+2. **HONESTIDAD:** Si no hay datos en ninguna fuente, dilo claramente.
+3. **MEMORIA:** Tienes acceso a un resumen de la conversación anterior.
+
+### 3. ACCIONES DE ESCRITURA (¡CUIDADO!):
+- Para **agendar reuniones**, usa `agendar_reunion_oficial`. Pide confirmación de fecha y hora antes de ejecutar.
+- Para **enviar correos**, si el usuario dice "envíalo" o "mándalo", usa `enviar_email_real`. Si solo dice "redacta" o "prepara", usa `crear_borrador_email`.
 """
 
-# --- DEFINICIÓN DEL AGENTE ---
-prompt = ChatPromptTemplate.from_messages([
-    ("system", system_instructions),
-    MessagesPlaceholder(variable_name="chat_history"), 
-    ("human", "{input}"),
-    ("placeholder", "{agent_scratchpad}"),
-])
-
+# --- CONFIGURACIÓN DE HERRAMIENTAS ---
+# [CORRECCIÓN 3: Agregar las nuevas herramientas a la lista]
 tools = [
     analista_de_datos_cliente,
     consultar_calendario_ministerio,
@@ -126,37 +132,83 @@ tools = [
     consultar_actas_reuniones,
     crear_borrador_email,
     get_search_tool(),
+    # Nuevas capacidades Fase 2
+    agendar_reunion_oficial,
+    enviar_email_real
 ]
 
-agent_runnable = create_tool_calling_agent(llm, tools, prompt)
+# Vinculamos las herramientas al LLM para que sepa cuáles puede llamar
+llm_with_tools = llm.bind_tools(tools)
 
-agent = AgentExecutor(
-    agent=agent_runnable,
-    tools=tools,
-    verbose=True,
-    max_iterations=10, 
-    handle_parsing_errors=True
+# --- DEFINICIÓN DEL GRAFO (LANGGRAPH) ---
+
+# 1. Definir el Estado del Agente
+class AgentState(TypedDict):
+    messages: Annotated[List[BaseMessage], operator.add]
+
+# 2. Nodo: El Agente (Cerebro)
+def call_model(state: AgentState):
+    messages = state['messages']
+    response = llm_with_tools.invoke(messages)
+    return {"messages": [response]}
+
+# 3. Nodo: Ejecutor de Herramientas
+tool_node = ToolNode(tools)
+
+# 4. Lógica de enrutamiento
+def should_continue(state: AgentState):
+    last_message = state['messages'][-1]
+    if last_message.tool_calls:
+        return "tools"
+    return END
+
+# 5. Construcción del Grafo
+workflow = StateGraph(AgentState)
+
+workflow.add_node("agent", call_model)
+workflow.add_node("tools", tool_node)
+
+workflow.set_entry_point("agent")
+
+workflow.add_conditional_edges(
+    "agent",
+    should_continue,
+    {
+        "tools": "tools",
+        END: END
+    }
 )
+
+workflow.add_edge("tools", "agent")
+
+app_graph = workflow.compile()
+
+# --- FUNCIÓN DE RESPUESTA PRINCIPAL ---
 
 def get_agent_response(user_message: str, chat_history: List[Any] = []):
     try:
-        logger.info(f"🤖 Pitu Procesando: {user_message}")
+        logger.info(f"🤖 Pitu Procesando (Graph+Actions): {user_message}")
         
-        # --- APLICACIÓN DE LA MEJORA 2 ---
-        # Usamos la función inteligente en lugar de la simple
+        # 1. Preparar memoria e input
         history_objects = get_memory_aware_history(chat_history)
         
-        # Debug: Verificar si se generó un resumen
+        # Debug memoria
         if len(history_objects) > 0 and isinstance(history_objects[0], SystemMessage):
             logger.info(f"🧠 Memoria comprimida activa. Resumen: {history_objects[0].content[:60]}...")
 
-        response = agent.invoke({
-            "input": user_message,
-            "chat_history": history_objects 
-        })
+        # 2. Construir la lista inicial de mensajes para el grafo
+        input_messages = [SystemMessage(content=system_instructions)] + history_objects + [HumanMessage(content=user_message)]
         
-        return response["output"]
+        # 3. Ejecutar el Grafo
+        result = app_graph.invoke(
+            {"messages": input_messages},
+            config={"recursion_limit": 15}
+        )
+        
+        # 4. Extraer la respuesta final
+        last_message = result["messages"][-1]
+        return last_message.content
 
     except Exception as e:
-        logger.error(f"❌ Error Crítico en Agente: {str(e)}", exc_info=True)
-        return f"Lo siento, ocurrió un error técnico: {str(e)}"
+        logger.error(f"❌ Error Crítico en Agente (Graph): {str(e)}", exc_info=True)
+        return f"Lo siento, ocurrió un error técnico en el procesamiento cognitivo: {str(e)}"

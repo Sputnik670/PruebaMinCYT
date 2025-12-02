@@ -1,6 +1,7 @@
 import pandas as pd
 import logging
 import re
+import traceback
 from datetime import datetime
 from langchain_experimental.agents import create_pandas_dataframe_agent
 from langchain_google_genai import ChatGoogleGenerativeAI
@@ -9,38 +10,38 @@ from tools.dashboard import obtener_datos_sheet_cached, SHEET_CLIENTE_ID, WORKSH
 
 logger = logging.getLogger(__name__)
 
-# --- CONFIGURACIÓN DE CAMBIO ---
-COTIZACION = {
-    "USD": 1200.0,
-    "EUR": 1300.0,
-    "ARS": 1.0
-}
+# --- 1. FUNCIONES DE LIMPIEZA Y PREPARACIÓN (ETL) ---
 
-# 1. FUNCIÓN DE LIMPIEZA DE MONEDA (parse_money_value)
 def parse_money_value(valor):
-    """Extrae (Moneda, Monto)."""
+    """
+    Convierte strings de dinero sucios (ej: '$ 1.200,50') a tuplas (Moneda, Float).
+    Maneja errores de formato comunes en Excel.
+    """
     if not valor: return "ARS", 0.0
     val_str = str(valor).strip().upper()
     
+    # Detección de moneda
     moneda = "ARS"
-    if any(s in val_str for s in ["USD", "U$S", "DOLAR", "DÓLAR", "US$"]):
+    if any(s in val_str for s in ["USD", "U$S", "DOLAR", "DÓLAR", "US$", "DOLARES"]):
         moneda = "USD"
-    elif any(s in val_str for s in ["EUR", "EURO", "€"]):
+    elif any(s in val_str for s in ["EUR", "EURO", "€", "EUROS"]):
         moneda = "EUR"
     
+    # Limpieza numérica: Dejar solo dígitos, puntos, comas y guiones
     val_limpio = re.sub(r'[^\d.,-]', '', val_str)
     if not val_limpio: return moneda, 0.0
 
-    last_comma = val_limpio.rfind(',')
-    last_point = val_limpio.rfind('.')
-
-    if last_comma > -1 and last_point > -1:
-        if last_comma > last_point: 
+    # Lógica heurística para decimales (detectar si es 1.000,00 o 1,000.00)
+    if ',' in val_limpio and '.' in val_limpio:
+        last_comma = val_limpio.rfind(',')
+        last_point = val_limpio.rfind('.')
+        if last_comma > last_point: # Formato Europeo/Latam: 1.000,50
             val_limpio = val_limpio.replace('.', '').replace(',', '.')
-        else:
+        else: # Formato US: 1,000.50
             val_limpio = val_limpio.replace(',', '')
-    elif last_comma > -1:
-        val_limpio = val_limpio.replace('.', '').replace(',', '.')
+    elif ',' in val_limpio:
+        # Asumimos coma como decimal si no hay puntos (ej: 500,50 -> 500.50)
+        val_limpio = val_limpio.replace(',', '.')
     
     try:
         monto = float(val_limpio)
@@ -49,49 +50,57 @@ def parse_money_value(valor):
         
     return moneda, monto
 
-# 2. FUNCIÓN DE EXTRACCIÓN DE FECHA (extraer_fecha_inteligente)
 def extraer_fecha_inteligente(valor):
+    """Intenta parsear fechas en múltiples formatos."""
     if not valor: return pd.NaT
     val_str = str(valor).strip()
+    
+    # Intento 1: Parseo directo (pandas es inteligente)
     try:
         return pd.to_datetime(val_str, dayfirst=True)
     except:
         pass
-    match = re.search(r'(\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?)', val_str)
+        
+    # Intento 2: Regex para extraer DD/MM
+    match = re.search(r'(\d{1,2})[/-](\d{1,2})(?:[/-](\d{2,4}))?', val_str)
     if match:
         try:
-            txt = match.group(1)
-            if len(txt) <= 5: txt += f"/{datetime.now().year}"
-            return pd.to_datetime(txt, dayfirst=True)
+            dia, mes = match.group(1), match.group(2)
+            anio = match.group(3)
+            if not anio: anio = datetime.now().year
+            return pd.to_datetime(f"{dia}/{mes}/{anio}", dayfirst=True)
         except:
             pass
     return pd.NaT
-    
-# 3. FUNCIÓN QUE CONSTRUYE EL DATAFRAME (get_dataframe_cliente)
+
 def get_dataframe_cliente():
-    raw_data = obtener_datos_sheet_cached(SHEET_CLIENTE_ID, WORKSHEET_CLIENTE_GID)
-    if not raw_data:
-        return pd.DataFrame()
-    
-    data_limpia = [procesar_fila_cliente(r) for r in raw_data]
-    df = pd.DataFrame(data_limpia)
-    
-    # Procesamiento de Moneda
-    if 'COSTO' in df.columns:
-        parsed = df['COSTO'].apply(parse_money_value)
-        df['MONEDA'] = parsed.apply(lambda x: x[0])
-        df['MONTO'] = parsed.apply(lambda x: x[1])
+    """Construye el DataFrame maestro con datos limpios y columnas auxiliares."""
+    try:
+        raw_data = obtener_datos_sheet_cached(SHEET_CLIENTE_ID, WORKSHEET_CLIENTE_GID)
+        if not raw_data:
+            return pd.DataFrame()
         
-        # Aseguramos que MONTO sea float para cálculos
-        df['MONTO'] = df['MONTO'].astype(float)
+        data_limpia = [procesar_fila_cliente(r) for r in raw_data]
+        df = pd.DataFrame(data_limpia)
+        
+        # Enriquecimiento de Datos (Feature Engineering para la IA)
+        if 'COSTO' in df.columns:
+            parsed = df['COSTO'].apply(parse_money_value)
+            df['MONEDA'] = parsed.apply(lambda x: x[0])
+            df['MONTO'] = parsed.apply(lambda x: x[1]).astype(float)
 
-    # Procesamiento de Fechas
-    if 'FECHA' in df.columns:
-        df['FECHA_DT'] = df['FECHA'].apply(extraer_fecha_inteligente)
-        df['MES'] = df['FECHA_DT'].dt.month
-        df['ANIO'] = df['FECHA_DT'].dt.year
+        if 'FECHA' in df.columns:
+            df['FECHA_DT'] = df['FECHA'].apply(extraer_fecha_inteligente)
+            df['MES'] = df['FECHA_DT'].dt.month
+            df['ANIO'] = df['FECHA_DT'].dt.year
+            df['MES_NOMBRE'] = df['FECHA_DT'].dt.month_name(locale='es_ES.UTF-8')
 
-    return df
+        return df
+    except Exception as e:
+        logger.error(f"Error construyendo DataFrame: {e}")
+        return pd.DataFrame()
+
+# --- 2. CONFIGURACIÓN DEL AGENTE DE ANÁLISIS ---
 
 def crear_agente_pandas():
     df = get_dataframe_cliente()
@@ -99,29 +108,23 @@ def crear_agente_pandas():
 
     llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0)
     
-    # --- PROMPT EXPANDIDO CON REGLAS DE NEGOCIO ---
+    # Prompt diseñado para reducir errores de Pandas (Chain-of-Thought)
     prompt_prefix = """
-    Estás trabajando con un DataFrame de Pandas 'df'.
+    Eres un Analista de Datos experto trabajando con un DataFrame de Pandas llamado 'df'.
     
-    1. CONTEXTO GENERAL:
-       - Este 'df' contiene la 'Agenda de Gestión Interna'.
-       - Si preguntan por "total", "agenda" o "gestión interna" a secas -> USA TODAS LAS FILAS (no filtres).
-
-    2. MAPEO DE COLUMNAS (Diccionario de Negocio):
-       - Si preguntan por "Institución" u "Organismo" -> Usa la columna 'INSTITUCIÓN'.
-       - Si preguntan por "Destino", "Ciudad" o "Viajes a..." -> Usa la columna 'LUGAR'.
-       - Si preguntan por "Estado" o "Pendientes" -> Usa la columna 'ESTADO' o 'RENDICIÓN'.
-       - Si preguntan por "Fecha" o "Mes" -> Usa las columnas 'MES' y 'ANIO'.
-
-    3. REGLAS DE FILTRADO INTELIGENTE:
-       - Filtro por TEXTO (Lugar/Evento/Institución): Usa siempre `str.contains('texto', case=False, na=False)`.
-       - Filtro por FECHA: Si piden "marzo", filtra `df['MES'] == 3`.
-       - Filtro por MONEDA: Siempre agrupa los resultados finales por 'MONEDA'.
-
-    4. FORMATO DE SALIDA OBLIGATORIO:
-       - Responde EXACTAMENTE con este formato para los totales:
-         "el costo es = EURO: X Y DOLAR: Y Y PESOS: Z"
-       - Si el usuario pidió un detalle (ej: "lista de viajes"), puedes listar las primeras 5 filas antes del total.
+    ### ESTRUCTURA DE DATOS:
+    - 'MONTO': Float. Usa esta columna para sumas y promedios. NUNCA uses 'COSTO' (es string).
+    - 'MONEDA': String ('ARS', 'USD', 'EUR'). SIEMPRE agrupa por esta columna al sumar dinero.
+    - 'FECHA_DT': Datetime. Úsala para filtrar por tiempo.
+    - 'INSTITUCIÓN', 'LUGAR', 'MOTIVO / EVENTO': Strings.
+    
+    ### REGLAS DE CODIFICACIÓN (CRÍTICO):
+    1. **Filtrado de Texto:** Al filtrar strings, usa SIEMPRE `.str.contains('valor', case=False, na=False)`. Nunca uses `==` directo para texto libre.
+    2. **Manejo de Errores:** Si te piden algo que no existe, verifica las columnas disponibles con `df.columns`.
+    3. **Totales:** Si piden "gastos totales", devuelve la suma desglosada por MONEDA.
+       Ejemplo de respuesta esperada: "Total en Pesos: $X, Total en Dólares: $Y".
+    
+    Si encuentras un error, intenta corregir tu propia consulta y prueba de nuevo.
     """
 
     return create_pandas_dataframe_agent(
@@ -129,29 +132,44 @@ def crear_agente_pandas():
         df, 
         verbose=True, 
         allow_dangerous_code=True,
-        return_intermediate_steps=False,
+        # Esta opción permite al sub-agente intentar corregir sus propios errores de Python
+        # antes de devolver el control al agente principal.
+        agent_executor_kwargs={"handle_parsing_errors": True},
         prefix=prompt_prefix,
-        # Pasamos el parámetro DENTRO de agent_executor_kwargs para evitar el UserWarning
-        agent_executor_kwargs={"handle_parsing_errors": True}
+        include_df_in_prompt=True
     )
+
+# --- 3. HERRAMIENTA EXPUESTA (CON MANEJO DE ERRORES PARA EL GRAFO) ---
 
 @tool
 def analista_de_datos_cliente(consulta: str):
     """
     Herramienta AVANZADA de GESTIÓN INTERNA. 
-    Especialista en: CÁLCULOS MATEMÁTICOS, sumas de costos, filtros complejos (por mes, por moneda, por estado) y reportes financieros.
-    Usa esta herramienta si la pregunta requiere procesar números o filtrar la agenda interna con precisión.
+    Especialista en: CÁLCULOS MATEMÁTICOS, sumas de costos, filtros complejos y reportes financieros.
+    
+    INPUT: Una descripción clara de qué calcular (ej: "Suma los gastos de viajes a Córdoba en Marzo").
+    OUTPUT: El resultado del cálculo o un mensaje de error descriptivo.
     """
     try:
         agent = crear_agente_pandas()
-        if not agent: return "Error: No hay datos disponibles en la planilla."
+        if agent is None: 
+            return "Error Técnico: No se pudieron cargar los datos de la planilla. Verifica la conexión con Google Sheets."
         
+        # Ejecución del agente de Pandas
+        logger.info(f"📊 Analista procesando: {consulta}")
         response = agent.invoke({"input": consulta})
         
-        # Devolvemos solo el output final para el usuario.
-        return response.get("output", f"Error: El agente no pudo generar una respuesta para '{consulta}'.")
+        output = response.get("output", "")
+        
+        # Validación de respuesta vacía o errónea
+        if not output or "Agent stopped" in output:
+            return "Error de Análisis: No pude llegar a una conclusión segura. Por favor reformula la pregunta simplificando los filtros."
+            
+        return output
 
     except Exception as e:
-        logger.error(f"Error analista: {e}")
-        # Si falla incluso con el manejo de errores, devolvemos un mensaje amigable
-        return f"Error de cálculo (intenta reformular): {e}"
+        # Capturamos el error y lo devolvemos como texto al Agente Principal.
+        # Esto activa la "Autocorrección" en el grafo de LangGraph.
+        error_msg = str(e)
+        logger.error(f"❌ Error en Analista: {error_msg}")
+        return f"FALLO EN EL CÁLCULO: Ocurrió el error '{error_msg}'. Por favor, intenta realizar la consulta nuevamente dividiéndola en pasos más simples."
