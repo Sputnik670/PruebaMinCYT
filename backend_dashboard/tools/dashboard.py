@@ -18,7 +18,6 @@ WORKSHEET_CLIENTE_GID = None
 
 # --- CONFIGURACIÓN DE CACHÉ (OPTIMIZACIÓN) ---
 # Guardamos los resultados por 10 minutos (600 segundos)
-# maxsize=5 es suficiente porque solo consultamos un par de hojas distintas
 cache_agenda = TTLCache(maxsize=5, ttl=600)
 
 def autenticar_google_sheets():
@@ -103,78 +102,123 @@ def obtener_datos_sheet(spreadsheet_id: str, worksheet_gid: int = None):
 # --- WRAPPER CON CACHÉ ---
 @cached(cache_agenda)
 def obtener_datos_sheet_cached(spreadsheet_id: str, worksheet_gid: int = None):
-    """
-    Versión memorizada de la obtención de datos.
-    Si se llama con los mismos ID dentro de 10 mins, devuelve la memoria RAM instantáneamente.
-    """
     return obtener_datos_sheet(spreadsheet_id, worksheet_gid)
 
-# --- LOGICA DE PROCESAMIENTO SEPARADA ---
+# --- LÓGICA DE PROCESAMIENTO INTELIGENTE (MEJORA 3) ---
+
+def buscar_valor_inteligente(fila_map, keywords_primarias, keywords_secundarias=None):
+    """
+    Busca un valor en el diccionario 'fila_map' probando múltiples variantes de nombres de columna.
+    Prioriza keywords_primarias (coincidencia fuerte) y luego secundarias (coincidencia parcial).
+    """
+    # 1. Búsqueda exacta o contenida fuerte
+    for key, value in fila_map.items():
+        if any(p == key for p in keywords_primarias): # Exacta (ej: 'fecha')
+            return value
+        if any(f" {p} " in f" {key} " for p in keywords_primarias): # Palabra completa contenida
+            return value
+
+    # 2. Búsqueda parcial (contiene la palabra)
+    match_secundario = None
+    all_keywords = keywords_primarias + (keywords_secundarias or [])
+    
+    for key, value in fila_map.items():
+        if any(p in key for p in all_keywords):
+            # Guardamos el primer match pero seguimos buscando por si hay uno mejor
+            if not match_secundario and value: 
+                match_secundario = value
+    
+    return match_secundario or ""
 
 def procesar_fila_cliente(fila):
-    """Normaliza solo las filas de la gestión interna"""
-    f_map = {k.lower().strip(): v for k, v in fila.items()}
+    """
+    Normaliza las filas de gestión interna usando BÚSQUEDA DIFUSA.
+    Esto hace al sistema resistente a cambios de nombres en el Excel.
+    """
+    # Normalizamos claves a minúsculas y sin espacios extra
+    f_map = {str(k).lower().strip(): v for k, v in fila.items()}
     
-    costo_encontrado = "0"
-    for key, value in f_map.items():
-        if any(palabra in key for palabra in ["costo", "precio", "valor", "monto", "importe", "presupuesto"]):
-            if value and str(value).strip(): 
-                costo_encontrado = value
-                break
+    # 1. Costo (Prioridad financiera)
+    costo = buscar_valor_inteligente(f_map, 
+        ["costo", "precio", "monto", "valor", "importe", "total"], 
+        ["presupuesto", "gasto"]
+    ) or "0"
+
+    # 2. Fecha Ida / Salida
+    fecha = buscar_valor_inteligente(f_map, 
+        ["fecha de salida", "fecha salida", "fecha ida", "salida"], 
+        ["fecha", "día", "date"]
+    )
+
+    # 3. Fecha Regreso
+    fecha_regreso = buscar_valor_inteligente(f_map, 
+        ["fecha de regreso", "fecha regreso", "fecha vuelta", "regreso", "vuelta"],
+        ["fin"]
+    )
+
+    # 4. Motivo
+    motivo = buscar_valor_inteligente(f_map,
+        ["motivo", "evento", "descripción", "actividad", "asunto"],
+        ["título", "nombre"]
+    ) or "Sin título"
+
+    # 5. Lugar
+    lugar = buscar_valor_inteligente(f_map,
+        ["lugar", "destino", "ciudad", "ubicación", "provincia"],
+        ["sitio", "zona"]
+    )
+
+    # 6. Institución / Pasajero
+    institucion = buscar_valor_inteligente(f_map,
+        ["institución", "institucion", "organismo", "empresa"],
+        ["quien", "pasajero", "solicitante"]
+    )
+
+    # 7. Estado
+    estado = buscar_valor_inteligente(f_map, ["estado", "status", "situación"], [])
+    rendicion = buscar_valor_inteligente(f_map, ["rendición", "rendicion", "expediente"], ["ee", "ex"])
 
     return {
-        "FECHA": f_map.get("fecha de salida viaje") or f_map.get("fecha", ""),
-        "MOTIVO / EVENTO": f_map.get("motivo") or f_map.get("evento") or "Sin título",
-        "LUGAR": f_map.get("lugar") or f_map.get("destino", ""),
-        "INSTITUCIÓN": f_map.get("institución") or f_map.get("institucion", ""),
-        "NOMBRE": f_map.get("nombre", ""),
-        "COSTO": costo_encontrado, 
-        "EE": f_map.get("ee", ""),
-        "ESTADO": f_map.get("estado", ""),
-        "RENDICIÓN": f_map.get("rendición") or f_map.get("rendicion", ""),
-        "F. REGRESO": f_map.get("fecha de regreso del viaje", ""),
+        "FECHA": fecha,
+        "MOTIVO / EVENTO": motivo,
+        "LUGAR": lugar,
+        "INSTITUCIÓN": institucion,
+        "COSTO": costo, 
+        "ESTADO": estado,
+        "RENDICIÓN": rendicion,
+        "F. REGRESO": fecha_regreso,
     }
 
 def procesar_fila_ministerio(fila):
-    """Normaliza solo las filas de la agenda oficial"""
-    f_map = {k.lower().strip(): v for k, v in fila.items()}
-    fecha = next((v for k,v in f_map.items() if "fecha" in k), "")
-    evento = next((v for k,v in f_map.items() if "título" in k or "evento" in k), "Evento Oficial")
-    lugar = next((v for k,v in f_map.items() if "lugar" in k or "ubicación" in k), "")
-    hora = next((v for k,v in f_map.items() if "hora" in k), "")
+    """Normaliza la agenda oficial también con lógica difusa"""
+    f_map = {str(k).lower().strip(): v for k, v in fila.items()}
     
     return {
-        "FECHA": fecha,
-        "HORA": hora,
-        "EVENTO": evento,
-        "LUGAR": lugar
+        "FECHA": buscar_valor_inteligente(f_map, ["fecha", "día"], ["cuándo"]),
+        "HORA": buscar_valor_inteligente(f_map, ["hora", "horario"], ["hs"]),
+        "EVENTO": buscar_valor_inteligente(f_map, ["evento", "título", "actividad"], ["qué"]),
+        "LUGAR": buscar_valor_inteligente(f_map, ["lugar", "ubicación"], ["dónde"])
     }
 
 # --- FUNCIONES EXPORTADAS PARA MAIN.PY (USANDO CACHÉ) ---
 
 def get_data_cliente_formatted():
-    # Usamos la versión _cached
     raw = obtener_datos_sheet_cached(SHEET_CLIENTE_ID, WORKSHEET_CLIENTE_GID)
     return [procesar_fila_cliente(r) for r in raw]
 
 def get_data_ministerio_formatted():
-    # Usamos la versión _cached
     raw = obtener_datos_sheet_cached(SHEET_MINISTERIO_ID, WORKSHEET_MINISTERIO_GID)
     return [procesar_fila_ministerio(r) for r in raw]
 
 def obtener_datos_raw():
-    """Función legacy para compatibilidad si se necesitara unir"""
     return get_data_cliente_formatted() + get_data_ministerio_formatted()
 
 # --- TOOLS DEL AGENTE (USANDO CACHÉ) ---
 
-# 1. HERRAMIENTA DE VALIDACIÓN
 @tool
 def analizar_estructura_tablas(consulta: str):
     """
-    Úsala cuando dudes sobre qué información contiene la agenda o si el usuario pregunta 
-    por columnas específicas (ej: '¿Hay columna de precios?').
-    Devuelve los nombres de las columnas detectadas en la planilla de Gestión (Cliente).
+    Herramienta de diagnóstico para ver qué columnas está detectando realmente el sistema.
     """
     try:
         raw_data = obtener_datos_sheet_cached(SHEET_CLIENTE_ID, WORKSHEET_CLIENTE_GID)
@@ -185,37 +229,22 @@ def analizar_estructura_tablas(consulta: str):
         ejemplo = raw_data[0]
         
         return f"""
-        --- ESTRUCTURA DETECTADA ---
-        Columnas encontradas: {', '.join(columnas)}
-        
-        Ejemplo de la primera fila:
-        {json.dumps(ejemplo, indent=2, ensure_ascii=False)}
-        
-        NOTA PARA EL AGENTE:
-        - Si ves columnas como 'Valor' o 'Importe', úsalas como Costo.
-        - Si ves columnas extrañas, infórmale al usuario.
+        --- ESTRUCTURA ORIGINAL (GOOGLE SHEETS) ---
+        Columnas: {', '.join(columnas)}
+        Ejemplo Raw: {json.dumps(ejemplo, indent=2, ensure_ascii=False)}
         """
     except Exception as e:
         return f"Error analizando estructura: {e}"
 
 @tool
 def consultar_calendario_ministerio(consulta: str):
-    """
-    Útil SOLO para consultas sobre la AGENDA PÚBLICA u OFICIAL del Ministro.
-    Devuelve: Fechas, eventos institucionales y ubicaciones.
-    NO contiene costos ni logística interna.
-    """
-    # Usamos la versión _cached
-    raw = obtener_datos_sheet_cached(SHEET_MINISTERIO_ID, WORKSHEET_MINISTERIO_GID)
-    return json.dumps([procesar_fila_ministerio(r) for r in raw])
+    """Agenda Pública / Oficial del Ministro."""
+    return json.dumps(get_data_ministerio_formatted(), ensure_ascii=False)
 
 @tool
 def consultar_calendario_cliente(consulta: str):
     """
-    Útil para listar eventos de la GESTIÓN INTERNA o LOGÍSTICA.
-    Devuelve: Fechas, pasajeros, destinos y motivos de viajes.
-    Ideal para ver 'qué hay agendado', pero NO realiza cálculos matemáticos complejos.
+    Agenda de Gestión Interna (Logística, Viajes).
+    Usa esta herramienta para ver listados crudos. Para cálculos, usa el analista.
     """
-    # Usamos la versión _cached
-    raw = obtener_datos_sheet_cached(SHEET_CLIENTE_ID, WORKSHEET_CLIENTE_GID)
-    return json.dumps([procesar_fila_cliente(r) for r in raw])
+    return json.dumps(get_data_cliente_formatted(), ensure_ascii=False)
