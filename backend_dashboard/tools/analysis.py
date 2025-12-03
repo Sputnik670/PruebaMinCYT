@@ -56,6 +56,7 @@ def extraer_fecha_inteligente(valor):
     val_str = str(valor).strip()
     
     # Intento 1: Parseo directo (pandas es inteligente)
+    # Forzamos dayfirst=True para formato Latino (DD/MM/YYYY)
     try:
         return pd.to_datetime(val_str, dayfirst=True)
     except:
@@ -93,7 +94,14 @@ def get_dataframe_cliente():
             df['FECHA_DT'] = df['FECHA'].apply(extraer_fecha_inteligente)
             df['MES'] = df['FECHA_DT'].dt.month
             df['ANIO'] = df['FECHA_DT'].dt.year
-            df['MES_NOMBRE'] = df['FECHA_DT'].dt.month_name(locale='es_ES.UTF-8')
+            
+            # --- SOLUCIÓN ROBUSTA PARA NOMBRES DE MESES (SIN LOCALE) ---
+            meses_es = {
+                1: "Enero", 2: "Febrero", 3: "Marzo", 4: "Abril", 5: "Mayo", 6: "Junio",
+                7: "Julio", 8: "Agosto", 9: "Septiembre", 10: "Octubre", 11: "Noviembre", 12: "Diciembre"
+            }
+            # Mapeamos el número del mes al nombre en español
+            df['MES_NOMBRE'] = df['MES'].map(meses_es).fillna('')
 
         return df
     except Exception as e:
@@ -116,6 +124,7 @@ def crear_agente_pandas():
     - 'MONTO': Float. Usa esta columna para sumas y promedios. NUNCA uses 'COSTO' (es string).
     - 'MONEDA': String ('ARS', 'USD', 'EUR'). SIEMPRE agrupa por esta columna al sumar dinero.
     - 'FECHA_DT': Datetime. Úsala para filtrar por tiempo.
+    - 'MES_NOMBRE': String. Contiene el nombre del mes en español (Enero, Febrero...).
     - 'INSTITUCIÓN', 'LUGAR', 'MOTIVO / EVENTO': Strings.
     
     ### REGLAS DE CODIFICACIÓN (CRÍTICO):

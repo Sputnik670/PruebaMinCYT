@@ -38,6 +38,7 @@ origins = [
     "http://localhost:3000",      # Por si usas otro puerto a veces
     "https://pruebamincyt.vercel.app/"
     "https://pruebamincyt-q4reoctt1-sputnik670s-projects.vercel.app"
+    "https://www.pruebasmincyt.ar"
 ]
 
 app.add_middleware(
