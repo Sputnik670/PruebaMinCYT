@@ -1,12 +1,12 @@
 import os
 import logging
+import json  # <--- NUEVO: Necesario para la solución
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, UploadFile, File, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse  # <--- NUEVO: Para Streaming
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from typing import List, Optional, Generator
-
 
 from agents.main_agent import get_agent_response
 from tools.dashboard import (
@@ -38,16 +38,14 @@ origins = [
     "http://localhost:3000",      # Por si usas otro puerto a veces
     "https://pruebamincyt.vercel.app/"
     "https://pruebamincyt-q4reoctt1-sputnik670s-projects.vercel.app"
-
 ]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,        # Lista explícita para desarrollo local
-    allow_credentials=True,       # Permitido porque ya no usamos ["*"]
+    allow_origins=origins,
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
-    # Esta regex se encarga de autorizar cualquier despliegue en Vercel
     allow_origin_regex=r"https://.*\.vercel\.app",
 )
 
@@ -62,8 +60,8 @@ class Message(BaseModel):
 class ChatRequest(BaseModel):
     message: str = Field(..., min_length=1, max_length=4000)
     history: Optional[List[Message]] = []
-    session_id: Optional[str] = None  # ← NUEVO
-    user_id: str = "usuario_anonimo"  # ← NUEVO
+    session_id: Optional[str] = None
+    user_id: str = "usuario_anonimo"
 
 # --- ENDPOINTS GENERALES ---
 
@@ -74,7 +72,7 @@ def read_root():
 @app.post("/api/chat")
 async def chat_endpoint(request: ChatRequest):
     """
-    Endpoint optimizado con Sistema de Sesiones Persistentes
+    Endpoint optimizado con Sistema de Sesiones Persistentes y Streaming JSON seguro
     """
     async def generate_response_stream():
         try:
@@ -119,21 +117,25 @@ async def chat_endpoint(request: ChatRequest):
             respuesta_completa = ""
             
             if hasattr(respuesta, '__iter__') and not isinstance(respuesta, str):
-                # Streaming response
+                # Streaming response (Chunk a Chunk)
                 for chunk in respuesta:
                     respuesta_completa += chunk
-                    yield f"data: {chunk}\n\n"
+                    # 🛡️ SOLUCIÓN: Envolver en JSON
+                    payload = json.dumps({"text": chunk})
+                    yield f"data: {payload}\n\n"
             else:
-                # Respuesta completa
+                # Respuesta completa (Bloque único)
                 respuesta_completa = respuesta
-                yield f"data: {respuesta}\n\n"
+                # 🛡️ SOLUCIÓN: Envolver en JSON
+                payload = json.dumps({"text": respuesta})
+                yield f"data: {payload}\n\n"
             
             # 🆕 GUARDAR LA CONVERSACIÓN
             session_manager.guardar_mensaje(
                 sesion_id=session_id,
                 mensaje_usuario=request.message,
                 respuesta_bot=respuesta_completa,
-                herramientas_usadas=[]  # TODO: capturar desde el agente
+                herramientas_usadas=[]
             )
 
         except Exception as e:
@@ -146,7 +148,6 @@ async def chat_endpoint(request: ChatRequest):
 
 @app.get("/api/agenda/ministerio")
 def get_agenda_ministerio_endpoint():
-    """Devuelve la tabla oficial limpia"""
     try:
         data = get_data_ministerio_formatted()
         return data
@@ -156,7 +157,6 @@ def get_agenda_ministerio_endpoint():
 
 @app.get("/api/agenda/cliente")
 def get_agenda_cliente_endpoint():
-    """Devuelve la tabla de gestión limpia"""
     try:
         data = get_data_cliente_formatted()
         return data
@@ -166,18 +166,15 @@ def get_agenda_cliente_endpoint():
 
 @app.get("/api/data")
 def get_dashboard_data():
-    """Endpoint fallback (devuelve cliente por defecto)"""
     return get_data_cliente_formatted()
 
 # --- ENDPOINTS DE ARCHIVOS Y AUDIO ---
 
 @app.post("/api/upload")
 def upload_file_endpoint(file: UploadFile = File(...)):
-    # Extensiones permitidas: PDF, Excel, CSV, Word, TXT
     allowed_extensions = ('.pdf', '.xlsx', '.xls', '.csv', '.docx', '.txt')
-    
     if not file.filename.lower().endswith(allowed_extensions):
-        raise HTTPException(status_code=400, detail="Formato no permitido. Solo PDF, Excel, Word, CSV o TXT.")
+        raise HTTPException(status_code=400, detail="Formato no permitido.")
     
     try:
         exito, mensaje = procesar_archivo_subido(file)
@@ -196,23 +193,18 @@ def upload_audio_endpoint(background_tasks: BackgroundTasks, file: UploadFile = 
          raise HTTPException(status_code=400, detail="El archivo debe ser de audio válido.")
     
     try:
-        # 1. Transcribir (El usuario espera esto en tiempo real)
         texto = procesar_audio_gemini(file)
-        
-        # 2. Guardar en BD en segundo plano (Background Task para no bloquear)
         if texto:
             background_tasks.add_task(guardar_acta, transcripcion=texto)
-        
         return {"mensaje": "Éxito", "transcripcion": texto}
     except Exception as e:
         logger.error(f"Error procesando audio: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
     
-    # --- ENDPOINTS DE SESIONES ---
+# --- ENDPOINTS DE SESIONES ---
 
 @app.get("/api/sesiones/{user_id}")
 def get_sesiones_usuario(user_id: str):
-    """Obtener historial de sesiones de un usuario"""
     try:
         sesiones = session_manager.listar_sesiones_usuario(user_id, limite=20)
         return {"sesiones": sesiones}
@@ -222,7 +214,6 @@ def get_sesiones_usuario(user_id: str):
 
 @app.get("/api/sesiones/{sesion_id}/historial")
 def get_historial_sesion(sesion_id: str):
-    """Obtener historial detallado de una sesión"""
     try:
         historial = session_manager.obtener_historial_sesion(sesion_id, limite=50)
         return {"historial": historial}

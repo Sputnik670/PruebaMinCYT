@@ -2,7 +2,7 @@
 
 import { Message } from '../types/types'; 
 
-// Configuración robusta de la URL (Estandarizada a 127.0.0.1 para evitar problemas de DNS/IPv6)
+// Configuración robusta de la URL
 const rawUrl = import.meta.env.VITE_BACKEND_URL || "http://127.0.0.1:8000";
 const API_URL = rawUrl.replace(/\/api\/?$/, "").replace(/\/$/, "");
 
@@ -44,11 +44,11 @@ export const sendMessageToGemini = async (
 
     if (!response.body) throw new Error("La respuesta no tiene cuerpo para leer (stream).");
 
-    // --- LÓGICA DE STREAMING MEJORADA (CON BUFFER) ---
+    // --- LÓGICA DE STREAMING MEJORADA (CON BUFFER Y PARSEO JSON) ---
     const reader = response.body.getReader();
     const decoder = new TextDecoder("utf-8");
     let done = false;
-    let buffer = ""; // <--- Nuevo Buffer acumulador
+    let buffer = ""; 
 
     while (!done) {
       const { value, done: doneReading } = await reader.read();
@@ -68,14 +68,30 @@ export const sendMessageToGemini = async (
         for (const part of parts) {
             // Verificamos el prefijo estándar de SSE "data: "
             if (part.startsWith("data: ")) {
-                const data = part.slice(6); // Quitamos "data: " de forma segura
-                onStreamUpdate(data);
+                const rawData = part.slice(6); // Quitamos "data: " de forma segura
+                
+                // --- 🛡️ AQUÍ ESTÁ EL CAMBIO CLAVE PARA CORREGIR EL CORTE DE TEXTO ---
+                try {
+                    // Intentamos leer como JSON primero (formato seguro)
+                    if (rawData.trim().startsWith("{")) {
+                        const parsed = JSON.parse(rawData);
+                        if (parsed.text) {
+                            onStreamUpdate(parsed.text);
+                        }
+                    } else {
+                        // Soporte Legacy / SESSION_ID (Texto plano)
+                        onStreamUpdate(rawData);
+                    }
+                } catch (e) {
+                    // Si falla el parseo JSON, mandamos el texto crudo (ej: errores o IDs simples)
+                    onStreamUpdate(rawData);
+                }
             }
         }
       }
     }
     
-    return true; // Indicamos éxito al finalizar
+    return true; 
 
   } catch (error) {
     console.error("Error conectando con el Backend:", error);
