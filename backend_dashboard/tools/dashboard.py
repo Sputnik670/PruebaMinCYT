@@ -10,11 +10,13 @@ from cachetools import TTLCache, cached
 logger = logging.getLogger(__name__)
 
 # --- CONFIGURACIÓN DE TABLAS (GOOGLE SHEETS) ---
-SHEET_MINISTERIO_ID = "1lkViCdCeq7F4yEHVdbjfrV-G7KvKP6TZfxsOc-Ov4xI"
+# Calendario internacionales (Ministerio)
+SHEET_MINISTERIO_ID = "1Sm2icTOvSbmGD7mdUtl2DfflUZqoHpBW" 
 WORKSHEET_MINISTERIO_GID = 563858184
 
-SHEET_CLIENTE_ID = "1uAIwNTIXF0HSP2h5owe0G-XS3lL43ZFITzD7Ekl-lBU" 
-WORKSHEET_CLIENTE_GID = None 
+# Gestión interna (Cliente)
+SHEET_CLIENTE_ID = "1HOiSJ-Hugkddv-kwGax6vhSV9tzthkiz" 
+WORKSHEET_CLIENTE_GID = None  # Al ser None, leerá TODAS las pestañas
 
 # --- CONFIGURACIÓN DE CACHÉ (OPTIMIZACIÓN) ---
 # Guardamos los resultados por 10 minutos (600 segundos)
@@ -53,6 +55,7 @@ def autenticar_google_sheets():
 def obtener_datos_sheet(spreadsheet_id: str, worksheet_gid: int = None):
     """
     Función pura que realiza la petición real a Google Sheets API.
+    MODIFICADA: Si worksheet_gid es None, lee TODAS las pestañas y las une.
     """
     try:
         logger.info(f"📡 Conectando a Google Sheets: {spreadsheet_id} (Sin caché)")
@@ -65,36 +68,59 @@ def obtener_datos_sheet(spreadsheet_id: str, worksheet_gid: int = None):
             logger.error(f"❌ Error abriendo hoja {spreadsheet_id}: {e}")
             return []
 
-        worksheet = None
-        if worksheet_gid:
+        # --- LÓGICA DE MULTI-HOJA ---
+        hojas_a_leer = []
+        if worksheet_gid is not None:
+            # Si hay un ID específico, intentamos leer solo ese
             try:
-                worksheet = sh.get_worksheet_by_id(worksheet_gid)
+                # Nota: gspread usa get_worksheet_by_id si la versión es reciente, 
+                # o iteración manual si es antigua. Intentamos el método directo.
+                w = sh.get_worksheet_by_id(worksheet_gid)
+                if w: hojas_a_leer.append(w)
             except Exception: pass
+        else:
+            # Si es None, ¡leemos TODAS las pestañas visibles!
+            hojas_a_leer = sh.worksheets()
         
-        if not worksheet: worksheet = sh.sheet1
+        logger.info(f"   📚 Se leerán {len(hojas_a_leer)} pestaña(s) del archivo.")
+        
+        datos_consolidados = []
 
-        data = worksheet.get_all_values()
-        if len(data) < 2: return []
+        for worksheet in hojas_a_leer:
+            try:
+                data = worksheet.get_all_values()
+                if len(data) < 2: continue # Ignorar hojas vacías o con solo cabecera
 
-        # Detección inteligente de cabecera (busca palabras clave en las primeras 8 filas)
-        header_idx = 0
-        for i, row in enumerate(data[:8]): 
-            row_lower = [str(c).lower() for c in row]
-            if any(k in row_lower for k in ["motivo", "título", "titulo", "evento", "fecha"]):
-                header_idx = i
-                break
-        
-        headers = data[header_idx]
-        rows = data[header_idx+1:]
-        
-        res = []
-        for r in rows:
-            if not any(r): continue 
-            if len(r) < len(headers): r += [""] * (len(headers) - len(r))
-            fila_dict = dict(zip(headers, r))
-            res.append(fila_dict)
+                # Detección inteligente de cabecera en cada hoja individualmente
+                header_idx = 0
+                for i, row in enumerate(data[:8]): 
+                    row_lower = [str(c).lower() for c in row]
+                    if any(k in row_lower for k in ["motivo", "título", "titulo", "evento", "fecha", "destino"]):
+                        header_idx = i
+                        break
+                
+                headers = data[header_idx]
+                rows = data[header_idx+1:]
+                
+                for r in rows:
+                    if not any(r): continue 
+                    # Rellenar columnas faltantes si la fila es corta
+                    if len(r) < len(headers): r += [""] * (len(headers) - len(r))
+                    
+                    fila_dict = dict(zip(headers, r))
+                    
+                    # Agregamos una marca para saber de qué pestaña vino el dato
+                    fila_dict["_ORIGEN"] = worksheet.title 
+                    
+                    datos_consolidados.append(fila_dict)
+                    
+            except Exception as e_sheet:
+                logger.warning(f"⚠️ Saltando hoja '{worksheet.title}' por error de lectura: {e_sheet}")
+                continue
             
-        return res
+        logger.info(f"✅ Total registros recuperados: {len(datos_consolidados)}")
+        return datos_consolidados
+
     except Exception as e:
         logger.error(f"Error general leyendo sheet: {e}")
         return []
@@ -104,7 +130,7 @@ def obtener_datos_sheet(spreadsheet_id: str, worksheet_gid: int = None):
 def obtener_datos_sheet_cached(spreadsheet_id: str, worksheet_gid: int = None):
     return obtener_datos_sheet(spreadsheet_id, worksheet_gid)
 
-# --- LÓGICA DE PROCESAMIENTO INTELIGENTE (MEJORA 3) ---
+# --- LÓGICA DE PROCESAMIENTO INTELIGENTE (BÚSQUEDA DIFUSA) ---
 
 def buscar_valor_inteligente(fila_map, keywords_primarias, keywords_secundarias=None):
     """
@@ -177,6 +203,9 @@ def procesar_fila_cliente(fila):
     # 7. Estado
     estado = buscar_valor_inteligente(f_map, ["estado", "status", "situación"], [])
     rendicion = buscar_valor_inteligente(f_map, ["rendición", "rendicion", "expediente"], ["ee", "ex"])
+    
+    # Extraemos el origen si existe (añadido en la lectura multi-hoja)
+    origen = f_map.get("_origen", "")
 
     return {
         "FECHA": fecha,
@@ -187,6 +216,7 @@ def procesar_fila_cliente(fila):
         "ESTADO": estado,
         "RENDICIÓN": rendicion,
         "F. REGRESO": fecha_regreso,
+        "HOJA_ORIGEN": origen # Útil para que el bot sepa de qué pestaña viene
     }
 
 def procesar_fila_ministerio(fila):
@@ -229,8 +259,9 @@ def analizar_estructura_tablas(consulta: str):
         ejemplo = raw_data[0]
         
         return f"""
-        --- ESTRUCTURA ORIGINAL (GOOGLE SHEETS) ---
-        Columnas: {', '.join(columnas)}
+        --- ESTRUCTURA ORIGINAL (GOOGLE SHEETS - MULTI HOJA) ---
+        Total registros: {len(raw_data)}
+        Columnas detectadas en el primer registro: {', '.join(columnas)}
         Ejemplo Raw: {json.dumps(ejemplo, indent=2, ensure_ascii=False)}
         """
     except Exception as e:
