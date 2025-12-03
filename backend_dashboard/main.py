@@ -32,14 +32,19 @@ logger = logging.getLogger("backend_main")
 app = FastAPI(title="MinCYT AI Dashboard", version="2.0.0")
 
 # Configuración CORS
-origins = ["*"]
+origins = [
+    "http://localhost:5173",      # Frontend Vite local (puerto estándar)
+    "http://127.0.0.1:5173",      # Frontend Vite local (IP explícita)
+    "http://localhost:3000",      # Por si usas otro puerto a veces
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
-    allow_credentials=True,
+    allow_origins=origins,        # Lista explícita para desarrollo local
+    allow_credentials=True,       # Permitido porque ya no usamos ["*"]
     allow_methods=["*"],
     allow_headers=["*"],
-    # CORRECCIÓN AUDITORÍA: Uso de 'r' para raw string en regex
+    # Esta regex se encarga de autorizar cualquier despliegue en Vercel
     allow_origin_regex=r"https://.*\.vercel\.app",
 )
 

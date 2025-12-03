@@ -11,7 +11,7 @@ export const sendMessageToGemini = async (
   message: string, 
   history: Message[], 
   onStreamUpdate: (chunk: string) => void, // Callback para ir enviando el texto
-  sessionId?: string | null // <--- NUEVO: Recibimos el ID de sesión opcional
+  sessionId?: string | null // Recibimos el ID de sesión opcional
 ) => {
   
   // Serialización correcta con ID para el historial visual
@@ -28,7 +28,7 @@ export const sendMessageToGemini = async (
       headers: {
         'Content-Type': 'application/json',
       },
-      // <--- CAMBIO CLAVE: Enviamos session_id al backend
+      // Enviamos session_id al backend
       body: JSON.stringify({ 
           message: message, 
           history: serializedHistory,
@@ -44,23 +44,34 @@ export const sendMessageToGemini = async (
 
     if (!response.body) throw new Error("La respuesta no tiene cuerpo para leer (stream).");
 
-    // --- LÓGICA DE STREAMING ---
+    // --- LÓGICA DE STREAMING MEJORADA (CON BUFFER) ---
     const reader = response.body.getReader();
     const decoder = new TextDecoder("utf-8");
     let done = false;
+    let buffer = ""; // <--- Nuevo Buffer acumulador
 
     while (!done) {
       const { value, done: doneReading } = await reader.read();
       done = doneReading;
       
       if (value) {
-        const chunk = decoder.decode(value, { stream: true });
+        // 1. Acumulamos lo que llega al buffer
+        buffer += decoder.decode(value, { stream: true });
         
-        // Limpiamos prefijos de protocolo si llegaran a colarse en el texto visible
-        // (Aunque ChatInterface ya maneja "data: SESSION_ID:", esto es por seguridad)
-        const cleanChunk = chunk.replace(/^data: /gm, "");
+        // 2. Buscamos separadores de evento completos (doble enter es el estándar SSE)
+        const parts = buffer.split("\n\n");
         
-        onStreamUpdate(cleanChunk); 
+        // 3. Guardamos el último fragmento (posiblemente incompleto) para la siguiente vuelta
+        buffer = parts.pop() || ""; 
+        
+        // 4. Procesamos solo las partes que llegaron completas
+        for (const part of parts) {
+            // Verificamos el prefijo estándar de SSE "data: "
+            if (part.startsWith("data: ")) {
+                const data = part.slice(6); // Quitamos "data: " de forma segura
+                onStreamUpdate(data);
+            }
+        }
       }
     }
     

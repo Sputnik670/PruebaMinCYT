@@ -6,7 +6,7 @@ export const MeetingHistory = ({ refreshTrigger }: { refreshTrigger: number }) =
   const [actas, setActas] = useState([]);
   const [loading, setLoading] = useState(true);
   
-  const rawUrl = import.meta.env.VITE_BACKEND_URL || "http://localhost:8000";
+  const rawUrl = import.meta.env.VITE_BACKEND_URL || "http://127.0.0.1:8000";
   const API_URL = rawUrl.replace(/\/api\/?$/, "").replace(/\/$/, "");
 
   const fetchHistorial = async () => {
