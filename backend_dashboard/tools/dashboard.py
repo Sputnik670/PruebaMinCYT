@@ -184,7 +184,7 @@ def obtener_datos_raw():
 
 @tool
 def analizar_estructura_tablas(consulta: str):
-    """Diagnóstico de columnas."""
+    """Diagnóstico de columnas para ver qué detecta el sistema."""
     try:
         raw_data = obtener_datos_sheet_cached(SHEET_CLIENTE_ID, WORKSHEET_CLIENTE_GID)
         if not raw_data: return "Error: No data."
@@ -193,8 +193,16 @@ def analizar_estructura_tablas(consulta: str):
 
 @tool
 def consultar_calendario_ministerio(consulta: str):
+    """
+    Consulta la Agenda Pública Oficial del Ministro. 
+    Devuelve eventos protocolares, actos y reuniones oficiales.
+    """
     return json.dumps(get_data_ministerio_formatted(), ensure_ascii=False, default=str)
 
 @tool
 def consultar_calendario_cliente(consulta: str):
+    """
+    Consulta la Agenda de Gestión Interna (Logística, Viajes, Misiones).
+    Útil para ver el listado de movimientos internos.
+    """
     return json.dumps(get_data_cliente_formatted(), ensure_ascii=False, default=str)
