@@ -36,6 +36,9 @@ origins = [
     "http://localhost:5173",      # Frontend Vite local (puerto estándar)
     "http://127.0.0.1:5173",      # Frontend Vite local (IP explícita)
     "http://localhost:3000",      # Por si usas otro puerto a veces
+    "https://pruebamincyt.vercel.app/"
+    "https://pruebamincyt-q4reoctt1-sputnik670s-projects.vercel.app"
+
 ]
 
 app.add_middleware(
