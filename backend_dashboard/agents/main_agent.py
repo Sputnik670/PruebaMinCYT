@@ -39,7 +39,7 @@ logger = logging.getLogger(__name__)
 
 # 1. Configuración del Modelo Principal
 llm = ChatGoogleGenerativeAI(
-    model="gemini-2.5-flash",
+    model="gemini-1.5-flash",
     temperature=0,
     max_retries=2,
 )

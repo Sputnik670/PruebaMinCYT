@@ -68,7 +68,7 @@ def procesar_audio_gemini(file: UploadFile) -> str:
             logger.info(f"✅ Audio listo: {audio_file.name}")
 
             # 5. Generar contenido (Transcripción)
-            model = genai.GenerativeModel('gemini-2.5-flash')
+            model = genai.GenerativeModel('gemini-1.5-flash')
             
             prompt = (
                 "Transcribe este audio. Si está en español, transcríbelo tal cual. "
