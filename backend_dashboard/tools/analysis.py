@@ -58,7 +58,6 @@ def obtener_meses_involucrados(fecha_str):
     matches = re.findall(r'(\d{1,2})[/-](\d{1,2})', texto)
     
     meses_detectados = set()
-    anio_actual = datetime.now().year
     
     # Si encontramos patrones de fecha
     for dia, mes in matches:
@@ -135,7 +134,8 @@ def crear_agente_pandas():
     df = get_dataframe_cliente()
     if df.empty: return None
 
-    llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0)
+    # CORRECCIÓN: Usamos un modelo válido (gemini-1.5-flash)
+    llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash", temperature=0)
     
     # --- PROMPT ACTUALIZADO PARA MIRAR LA NUEVA COLUMNA ---
     prompt_prefix = """

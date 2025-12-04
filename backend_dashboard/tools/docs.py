@@ -15,7 +15,11 @@ logger = logging.getLogger(__name__)
 
 # 1. Conexión a Supabase y Gemini
 url = os.environ.get("SUPABASE_URL")
-key = os.environ.get("SUPABASE_KEY")
+
+# --- CORRECCIÓN DE LÓGICA: PERMISOS ---
+# Usamos la Service Role Key para tener permisos de administrador y saltar las políticas RLS
+key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or os.environ.get("SUPABASE_KEY")
+
 supabase = create_client(url, key)
 
 # --- MODELO DE EMBEDDINGS ---
