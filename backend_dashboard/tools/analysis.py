@@ -18,6 +18,7 @@ def parse_money_value(valor):
     if not valor: return "ARS", 0.0
     val_str = str(valor).strip().upper()
     moneda = "ARS"
+    
     # Detección de moneda
     if any(s in val_str for s in ["USD", "U$S", "DOLAR", "DÓLAR", "US$", "DOLARES"]):
         moneda = "USD"
@@ -29,6 +30,7 @@ def parse_money_value(valor):
     if not val_limpio: return moneda, 0.0
     
     # Lógica para diferenciar miles de decimales
+    # Si hay punto y coma, asumimos formato estándar (1.000,50 o 1,000.50)
     if ',' in val_limpio and '.' in val_limpio:
         last_comma = val_limpio.rfind(',')
         last_point = val_limpio.rfind('.')
@@ -36,7 +38,8 @@ def parse_money_value(valor):
             val_limpio = val_limpio.replace('.', '').replace(',', '.')
         else: # Formato USA: 1,000.50
             val_limpio = val_limpio.replace(',', '')
-    elif ',' in val_limpio: # Asumimos coma como decimal si solo hay comas
+    elif ',' in val_limpio: 
+        # Si solo hay comas, asumimos que es decimal (ej: 50,50)
         val_limpio = val_limpio.replace(',', '.')
         
     try:
@@ -46,7 +49,10 @@ def parse_money_value(valor):
     return moneda, monto
 
 def obtener_meses_involucrados(fecha_str):
-    """Devuelve los nombres de los meses detectados en un string de fecha."""
+    """
+    Analiza strings como '30-11 al 06-12' y devuelve una lista de nombres de meses.
+    Ej: 'Noviembre, Diciembre'
+    """
     if not fecha_str: return "Sin Fecha"
     texto = str(fecha_str).lower()
     
@@ -55,75 +61,87 @@ def obtener_meses_involucrados(fecha_str):
         7: "Julio", 8: "Agosto", 9: "Septiembre", 10: "Octubre", 11: "Noviembre", 12: "Diciembre"
     }
     
-    # Busca patrones dd/mm
+    # Buscar patrones dd/mm
     matches = re.findall(r'(\d{1,2})[/-](\d{1,2})', texto)
     meses_detectados = set()
     
     for dia, mes in matches:
         try:
             m = int(mes)
-            if 1 <= m <= 12: meses_detectados.add(meses_map[m])
+            if 1 <= m <= 12:
+                meses_detectados.add(meses_map[m])
         except: pass
 
-    # Intento fallback con pandas
+    # Intento fallback con pandas para fechas únicas
     try:
         dt = pd.to_datetime(fecha_str, dayfirst=True)
-        if not pd.isna(dt): meses_detectados.add(meses_map[dt.month])
+        if not pd.isna(dt):
+            meses_detectados.add(meses_map[dt.month])
     except: pass
 
-    if not meses_detectados: return "Fecha Desconocida"
+    if not meses_detectados:
+        return "Fecha Desconocida"
+        
     return ", ".join(sorted(list(meses_detectados)))
 
 def extraer_fecha_inteligente(valor):
-    """Intenta obtener un objeto datetime para ordenamientos."""
+    """Intenta obtener un objeto datetime válido para ordenamientos."""
     if not valor: return pd.NaT
     val_str = str(valor).strip()
+    
+    # Prioridad: Buscar la primera fecha en el texto
     match = re.search(r'(\d{1,2})[/-](\d{1,2})(?:[/-](\d{2,4}))?', val_str)
     if match:
         try:
             dia, mes = match.group(1), match.group(2)
-            anio = match.group(3) or datetime.now().year
+            anio = match.group(3)
+            if not anio: anio = datetime.now().year
             return pd.to_datetime(f"{dia}/{mes}/{anio}", dayfirst=True)
         except: pass
+            
     try:
         return pd.to_datetime(val_str, dayfirst=True)
-    except: return pd.NaT
+    except:
+        return pd.NaT
 
 def get_dataframe_cliente():
     """Construye el DataFrame maestro con datos limpios y tipados."""
     try:
         raw_data = obtener_datos_sheet_cached(SHEET_CLIENTE_ID, WORKSHEET_CLIENTE_GID)
-        if not raw_data: return pd.DataFrame()
+        if not raw_data:
+            return pd.DataFrame()
         
         data_limpia = [procesar_fila_cliente(r) for r in raw_data]
         df = pd.DataFrame(data_limpia)
         
-        # Procesamiento de Costos
-        if 'COSTO' in df.columns:
-            parsed = df['COSTO'].apply(parse_money_value)
+        # Procesamiento de Costos (Si existe la columna)
+        col_costo = next((c for c in df.columns if 'COSTO' in c.upper() or 'PRECIO' in c.upper()), None)
+        if col_costo:
+            parsed = df[col_costo].apply(parse_money_value)
             df['MONEDA'] = parsed.apply(lambda x: x[0])
-            df['MONTO'] = parsed.apply(lambda x: x[1]).astype(float) # Tipado explícito
+            df['MONTO'] = parsed.apply(lambda x: x[1]).astype(float)
 
         # Procesamiento de Fechas
-        if 'FECHA' in df.columns:
-            df['FECHA_DT'] = df['FECHA'].apply(extraer_fecha_inteligente)
-            df['MESES_IMPACTO'] = df['FECHA'].apply(obtener_meses_involucrados)
+        col_fecha = next((c for c in df.columns if 'FECHA' in c.upper()), None)
+        if col_fecha:
+            df['FECHA_DT'] = df[col_fecha].apply(extraer_fecha_inteligente)
+            df['MESES_IMPACTO'] = df[col_fecha].apply(obtener_meses_involucrados)
 
         return df
     except Exception as e:
         logger.error(f"Error construyendo DataFrame: {e}")
         return pd.DataFrame()
 
-# --- 2. CONFIGURACIÓN DEL AGENTE (CON FEW-SHOT PROMPTING) ---
+# --- 2. CONFIGURACIÓN DEL AGENTE DE ANÁLISIS ---
 
 def crear_agente_pandas():
     df = get_dataframe_cliente()
     if df.empty: return None
 
-    # Usamos Gemini 1.5 Flash (versión estable y rápida)
-    llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash", temperature=0)
+    # USAMOS EL MODELO MÁS POTENTE DISPONIBLE EN TU LISTA
+    llm = ChatGoogleGenerativeAI(model="models/gemini-2.0-flash-exp", temperature=0)
     
-    # --- PROMPT ENRIQUECIDO ---
+    # --- PROMPT CON EJEMPLOS (FEW-SHOT) ---
     prompt_prefix = """
     Eres un Analista de Datos experto. Trabajas con un DataFrame de Pandas 'df'.
     
@@ -150,9 +168,9 @@ def crear_agente_pandas():
     Código: df[df['MOTIVO / EVENTO'].str.contains('Inteligencia|IA', case=False, na=False, regex=True)][['FECHA', 'MOTIVO / EVENTO']]
 
     ### REGLAS OBLIGATORIAS:
-    1. Usa SIEMPRE `.str.contains(..., case=False, na=False)` para búsquedas de texto.
-    2. Si piden totales monetarios, devuelve el número separado por moneda (ej: "1000 USD y 50000 ARS").
-    3. No inventes datos. Si el resultado es vacío, dilo.
+    1. Usa SIEMPRE `.str.contains(..., case=False, na=False)` para búsquedas de texto (insensible a mayúsculas).
+    2. Si piden totales monetarios, devuelve el número separado por moneda (ej: "1000 USD y 50000 ARS"). NO sumes monedas distintas.
+    3. Si el resultado es vacío, dilo claramente.
     """
 
     return create_pandas_dataframe_agent(
@@ -178,17 +196,17 @@ def analista_de_datos_cliente(consulta: str):
         if agent is None: 
             return "Error Técnico: No se pudieron cargar los datos para el análisis."
         
-        logger.info(f"📊 Analista iniciando consulta: {consulta}")
+        logger.info(f"📊 Analista procesando: {consulta}")
         
         # Invocación del agente
         response = agent.invoke({"input": consulta})
         output = response.get("output", "")
         
         if not output or "Agent stopped" in output:
-            return "No pude realizar el cálculo exacto. Por favor, reformula la pregunta de manera más específica."
+            return "No pude realizar el cálculo exacto. Por favor, sé más específico con la pregunta."
             
         return output
 
     except Exception as e:
         logger.error(f"Error en analista: {e}")
-        return f"Ocurrió un error al procesar los datos: {str(e)}"
+        return f"Ocurrió un error técnico al procesar los datos: {str(e)}"

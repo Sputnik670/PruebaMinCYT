@@ -36,9 +36,9 @@ from tools.actions import agendar_reunion_oficial, enviar_email_real
 
 logger = logging.getLogger(__name__)
 
-# 1. Configuración del Modelo Principal (CORREGIDO a 1.5 Flash)
+# 1. Configuración del Modelo Principal (OPTIMIZADO a 2.5 Flash)
 llm = ChatGoogleGenerativeAI(
-    model="gemini-1.5-flash", # <--- VERSIÓN ESTABLE Y RÁPIDA
+    model="gemini-2.5-flash", # <--- MODELO POTENTE Y RÁPIDO PARA CHAT
     temperature=0,
     max_retries=2,
 )
@@ -89,7 +89,7 @@ TU OBJETIVO: Resolver consultas complejas sobre gestión, presupuesto y agenda m
 Antes de responder, PIENSA paso a paso:
 1. **¿Qué me están pidiendo?** (Dato puntual, cálculo matemático, redacción o acción).
 2. **¿Tengo el dato en mi memoria?** Si no, ¿qué herramienta lo tiene?
-3. **¿Es un cálculo?** -> DELEGO AL `analista_de_datos_cliente`. NO calculo yo.
+3. **¿Es un cálculo o estadística?** -> DELEGO AL `analista_de_datos_cliente`. NO calculo yo mentalmente.
 4. **¿Es una acción?** -> Confirmo detalles antes de ejecutar `agendar` o `enviar`.
 
 ### 🛠️ SELECCIÓN DE HERRAMIENTAS:
@@ -98,7 +98,7 @@ Antes de responder, PIENSA paso a paso:
   - "Gastos totales de viajes a Córdoba".
   - "Cuántos eventos hubo en Noviembre".
   - "Sumar el presupuesto del área X".
-  - *Tip:* Si la pregunta implica números o filtros, úsala.
+  - *Tip:* Si la pregunta implica números, sumas o filtros, úsala.
 
 - **consultar_calendario_ministerio**: Solo para agenda pública/política del Ministro.
 - **consultar_calendario_cliente**: Para listados crudos de logística interna (sin cálculos).

@@ -7,16 +7,13 @@ from pathlib import Path
 import google.generativeai as genai
 from fastapi import UploadFile, HTTPException
 
-# Nota: El import de guardar_acta se mantiene por compatibilidad
 try:
     from .database import guardar_acta
 except ImportError:
     from backend_dashboard.tools.database import guardar_acta
 
-# Configurar logger local
 logger = logging.getLogger(__name__)
 
-# 1. CONFIGURACIÓN DE LA API KEY
 api_key = os.getenv("GOOGLE_API_KEY")
 if not api_key:
     logger.error("❌ ERROR CRÍTICO: No se encontró GOOGLE_API_KEY.")
@@ -25,7 +22,7 @@ else:
 
 def procesar_audio_gemini(file: UploadFile) -> str:
     """
-    Recibe un archivo de audio, valida su integridad y lo transcribe con Gemini 1.5 Flash.
+    Recibe un archivo de audio, valida su integridad y lo transcribe con Gemini 2.5 Flash.
     """
     tmp_path = None
     
@@ -33,14 +30,12 @@ def procesar_audio_gemini(file: UploadFile) -> str:
         if not api_key:
             raise ValueError("La API Key de Google no está configurada.")
 
-        # 2. Guardar temporalmente y VALIDAR TAMAÑO
         suffix = Path(file.filename).suffix or ".webm"
         
         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
             shutil.copyfileobj(file.file, tmp)
             tmp_path = tmp.name
             
-        # Verificar tamaño del archivo
         file_size = os.path.getsize(tmp_path)
         logger.info(f"🎙️ Archivo guardado: {tmp_path} | Tamaño: {file_size} bytes")
         
@@ -48,13 +43,11 @@ def procesar_audio_gemini(file: UploadFile) -> str:
             raise ValueError(f"El audio grabado es demasiado corto ({file_size} bytes).")
 
         try:
-            # 3. Subir a Gemini con MimeType EXPLÍCITO
             logger.info(f"Subiendo a Gemini (Mime: {file.content_type})...")
             mime = "audio/webm" if suffix == ".webm" else file.content_type
             
             audio_file = genai.upload_file(path=tmp_path, mime_type=mime)
             
-            # 4. Esperar procesamiento
             logger.info("⏳ Esperando procesamiento en la nube...")
             while audio_file.state.name == "PROCESSING":
                 time.sleep(1)
@@ -65,9 +58,8 @@ def procesar_audio_gemini(file: UploadFile) -> str:
             
             logger.info(f"✅ Audio listo: {audio_file.name}")
 
-            # 5. Generar contenido (Transcripción)
-            # CORRECCIÓN: Usamos el modelo 1.5 Flash
-            model = genai.GenerativeModel('gemini-1.5-flash')
+            # CORRECCIÓN DE MODELO: Usamos "gemini-2.5-flash"
+            model = genai.GenerativeModel('gemini-2.5-flash')
             
             prompt = (
                 "Transcribe este audio con precisión. "
@@ -81,7 +73,6 @@ def procesar_audio_gemini(file: UploadFile) -> str:
             return texto_transcrito
 
         finally:
-            # Limpieza de archivo local y de la API
             if 'audio_file' in locals():
                 try:
                     genai.delete_file(audio_file.name)
