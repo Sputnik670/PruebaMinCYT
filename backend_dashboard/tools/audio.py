@@ -7,8 +7,7 @@ from pathlib import Path
 import google.generativeai as genai
 from fastapi import UploadFile, HTTPException
 
-# Nota: El import de guardar_acta se mantiene por si se usa en otro contexto,
-# pero su llamada dentro de esta función se elimina para usar BackgroundTasks en main.py.
+# Nota: El import de guardar_acta se mantiene por compatibilidad
 try:
     from .database import guardar_acta
 except ImportError:
@@ -26,8 +25,7 @@ else:
 
 def procesar_audio_gemini(file: UploadFile) -> str:
     """
-    Recibe un archivo de audio, valida su integridad y lo transcribe con Gemini.
-    Ya NO guarda en Supabase; esa tarea se delega a BackgroundTasks en main.py.
+    Recibe un archivo de audio, valida su integridad y lo transcribe con Gemini 1.5 Flash.
     """
     tmp_path = None
     
@@ -68,19 +66,19 @@ def procesar_audio_gemini(file: UploadFile) -> str:
             logger.info(f"✅ Audio listo: {audio_file.name}")
 
             # 5. Generar contenido (Transcripción)
+            # CORRECCIÓN: Usamos el modelo 1.5 Flash
             model = genai.GenerativeModel('gemini-1.5-flash')
             
             prompt = (
-                "Transcribe este audio. Si está en español, transcríbelo tal cual. "
-                "Si está en otro idioma, tradúcelo al español. Solo devuelve el texto."
+                "Transcribe este audio con precisión. "
+                "Si identificas distintos hablantes, trata de diferenciarlos. "
+                "Si es una reunión, genera un texto corrido y coherente."
             )
 
             response = model.generate_content([prompt, audio_file])
             texto_transcrito = response.text 
-
-            # NOTA: Se eliminó el bloque de guardado síncrono.
             
-            return texto_transcrito # Solo devolvemos la transcripción
+            return texto_transcrito
 
         finally:
             # Limpieza de archivo local y de la API
