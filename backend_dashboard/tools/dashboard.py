@@ -4,7 +4,7 @@ import gspread
 import logging
 import io
 import re
-import unicodedata  # <--- NUEVO: Para manejar acentos
+import unicodedata  
 import pandas as pd
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
@@ -14,10 +14,10 @@ from cachetools import TTLCache, cached
 
 logger = logging.getLogger(__name__)
 
-# CONFIGURACIÓN
-SHEET_MINISTERIO_ID = "1Sm2icTOvSbmGD7mdUtl2DfflUZqoHpBW" 
+
+SHEET_MINISTERIO_ID = "1Sm2icTOvSbmGD7mdUtl2DfflUZqoHpBW" #CalendarioInternacionales
 WORKSHEET_MINISTERIO_GID = 563858184
-SHEET_CLIENTE_ID = "1HOiSJ-Hugkddv-kwGax6vhSV9tzthkiz" 
+SHEET_CLIENTE_ID = "1HOiSJ-Hugkddv-kwGax6vhSV9tzthkiz" #MisionesOficialesSICyt
 WORKSHEET_CLIENTE_GID = None 
 
 cache_agenda = TTLCache(maxsize=5, ttl=600)
@@ -40,7 +40,7 @@ def get_creds():
     }
     return service_account.Credentials.from_service_account_info(creds_dict, scopes=["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"])
 
-# --- NUEVA FUNCIÓN DE LIMPIEZA SEGURA ---
+# --- FUNCIÓN DE LIMPIEZA SEGURA ---
 def limpiar_nombre_columna(col_name):
     """
     Convierte 'Título' -> 'TITULO', 'Fecha inicio' -> 'FECHAINICIO'
