@@ -1,13 +1,14 @@
 import os
 import re
-from supabase import create_client, Client
 import logging
+from supabase import create_client, Client
 from langchain_core.tools import tool
-from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGenerativeAI
+from langchain_google_genai import GoogleGenerativeAIEmbeddings
 
 logger = logging.getLogger(__name__)
 
-# --- CONFIGURACIÓN SUPABASE Y MODELOS ---
+# --- CONFIGURACIÓN ---
+# Cliente Mock para evitar caídas si faltan credenciales en dev local
 class MockClient:
     def table(self, name): return self
     def insert(self, data): return self
@@ -29,17 +30,10 @@ if not url or not key:
 else:
     try:
         supabase: Client = create_client(url, key)
-    except Exception as e:
+    except Exception:
         supabase = MockClient()
 
-# Cliente fresco para background tasks
-def get_fresh_supabase_client() -> Client:
-    url_local = os.getenv("SUPABASE_URL")
-    key_local = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_KEY")
-    if not url_local or not key_local: return MockClient()
-    return create_client(url_local, key_local)
-
-# Modelos
+# Modelo de Embeddings para consultas (debe coincidir con docs.py)
 try:
     embeddings_model = GoogleGenerativeAIEmbeddings(
         model="models/text-embedding-004", 
@@ -51,28 +45,101 @@ except Exception:
         task_type="retrieval_query"
     )
 
-llm_reformulador = ChatGoogleGenerativeAI(
-    model="gemini-2.5-flash", 
-    temperature=0, # Cero creatividad para extraer keywords
-)
+# --- TOOLS ---
 
-# --- FUNCIONES DE ACTAS (MANTENIDAS) ---
+@tool
+def consultar_actas_reuniones(query: str):
+    """Consulta el historial de reuniones grabadas previamente."""
+    try:
+        response = supabase.table("actas_reunion").select("*").order("created_at", desc=True).limit(5).execute()
+        actas = response.data if response.data else []
+        
+        if not actas: return "No hay actas registradas."
+        
+        texto = "--- HISTORIAL REUNIONES ---\n"
+        for a in actas:
+            fecha = a.get('created_at', '')[:10]
+            titulo = a.get('titulo', 'Sin título')
+            # Preferimos el resumen IA, si no, un trozo de transcripción
+            contenido = a.get('resumen_ia') or (a.get('transcripcion', '')[:200] + "...")
+            texto += f"- ID {a.get('id')} [{fecha}] {titulo}: {contenido}\n"
+        return texto
+    except Exception as e:
+        return f"Error consultando actas: {e}"
+
+@tool
+def consultar_biblioteca_documentos(pregunta: str):
+    """
+    [DEPARTAMENTO 2: LEGAL Y DOCUMENTAL]
+    ÚSALA para leer documentos subidos (PDF, Word, Normativas).
+    - Busco por similitud semántica y palabras clave.
+    - Úsala si preguntan "¿Qué dice el documento X?", "Busca información sobre...", "Cláusulas de...".
+    - Devuelve fragmentos de texto originales. NO inventa.
+    """
+    try:
+        # 1. Vectorizar la pregunta del usuario
+        vector_pregunta = embeddings_model.embed_query(pregunta)
+        
+        # 2. Búsqueda Semántica en Supabase (RPC)
+        # Nota: Requiere que la función 'buscar_documentos' exista en tu Supabase.
+        response = supabase.rpc(
+            "buscar_documentos", 
+            {
+                "query_embedding": vector_pregunta,
+                "match_threshold": 0.40, # Umbral de similitud (0 a 1)
+                "match_count": 8         # Traemos más candidatos para filtrar luego
+            }
+        ).execute()
+        
+        if not response.data:
+            return "No se encontraron documentos relevantes en la biblioteca."
+
+        candidatos = response.data
+        
+        # 3. Re-Ranking Lógico (Python-side)
+        # Si la pregunta menciona un archivo específico (ej: "en el presupuesto"),
+        # priorizamos chunks cuyo 'source' coincida.
+        palabras_clave = [w.lower() for w in pregunta.split() if len(w) > 4]
+        
+        def score_extra(doc):
+            # Damos puntos extra si el nombre del archivo está en la pregunta
+            source = doc.get('metadata', {}).get('source', '').lower()
+            if any(p in source for p in palabras_clave):
+                return 10
+            return 0
+
+        # Ordenamos por (Score Semántico original + Bonus de nombre de archivo)
+        # Asumimos que RPC devuelve 'similarity'.
+        candidatos.sort(key=lambda x: x.get('similarity', 0) + score_extra(x), reverse=True)
+
+        # 4. Formatear Respuesta para el Agente
+        # Tomamos los Top 4 definitivos
+        top_docs = candidatos[:4]
+        
+        contexto = f"--- RESULTADOS DE BÚSQUEDA ({len(top_docs)} fragmentos) ---\n"
+        for i, doc in enumerate(top_docs):
+            fuente = doc.get('metadata', {}).get('source', 'Desconocido')
+            # Limpiamos saltos excesivos para ahorrar tokens
+            contenido = doc.get('content', '').replace('\n', ' ').strip()
+            # Cortamos si es muy largo
+            if len(contenido) > 1000: contenido = contenido[:1000] + "..."
+            
+            contexto += f"📄 [Doc {i+1}] FUENTE: {fuente}\nCONTENIDO: {contenido}\n\n"
+            
+        return contexto
+
+    except Exception as e:
+        logger.error(f"Error biblioteca: {e}")
+        return f"Error técnico consultando documentos: {str(e)}"
+
+# Funciones de soporte para guardar actas (usadas por audio.py)
 def guardar_acta(transcripcion: str, resumen: str = None):
     try:
-        db_client = get_fresh_supabase_client() 
         titulo = "Reunión: " + (transcripcion[:40] + "..." if len(transcripcion) > 40 else transcripcion)
         data = {"transcripcion": transcripcion, "resumen_ia": resumen, "titulo": titulo}
-        res = db_client.table("actas_reunion").insert(data).execute()
-        return res.data
+        supabase.table("actas_reunion").insert(data).execute()
     except Exception as e:
-        logger.error(f"Error guardando acta: {e}") 
-        return None
-
-def obtener_historial_actas():
-    try:
-        response = supabase.table("actas_reunion").select("*").order("created_at", desc=True).limit(10).execute()
-        return response.data if response.data else []
-    except Exception: return []
+        logger.error(f"Error guardando acta: {e}")
 
 def borrar_acta(id_acta: int):
     try:
@@ -80,82 +147,6 @@ def borrar_acta(id_acta: int):
         return True
     except Exception: return False
 
-# --- TOOLS ---
-
-@tool
-def consultar_actas_reuniones(query: str):
-    """Consulta el historial de reuniones grabadas."""
-    actas = obtener_historial_actas()
-    if not actas: return "No hay actas registradas."
-    texto = "--- HISTORIAL REUNIONES ---\n"
-    for a in actas:
-        fecha = a.get('created_at', '')[:10]
-        titulo = a.get('titulo', 'Sin título')
-        contenido = a.get('resumen_ia') or a.get('transcripcion', '')
-        texto += f"- ID {a.get('id')} [{fecha}] {titulo}: {contenido[:300]}...\n"
-    return texto
-
-@tool
-def consultar_biblioteca_documentos(pregunta: str):
-    """
-    [ANALISTA 1: LEGAL Y DOCUMENTAL]
-    ÚSALA para buscar información cualitativa, legal, conceptual o resúmenes en documentos (PDF/Word).
-    - Búsqueda de cláusulas, expedientes específicos, resoluciones, leyes o temas de texto.
-    - Úsala si preguntan "¿Qué dice el documento X?" o "Busca información sobre...".
-    - NO la uses para cálculos matemáticos, sumas de dinero o agenda (usa al Analista 2 para eso).
-    """
-    try:
-        # 1. Extraer palabras clave críticas (Números, Apellidos, Códigos)
-        keywords = re.findall(r'\b\d{3,}\b|\b[A-Z]{2,}\b', pregunta.upper())
-        
-        # 2. Vectorizar pregunta original
-        vector_pregunta = embeddings_model.embed_query(pregunta)
-        
-        # 3. Buscar en BD (Traemos más candidatos para filtrar después)
-        response = supabase.rpc(
-            "buscar_documentos", 
-            {
-                "query_embedding": vector_pregunta,
-                "match_threshold": 0.35, # Bajamos umbral para traer más opciones
-                "match_count": 10        # Traemos 10 candidatos
-            }
-        ).execute()
-        
-        if not response.data:
-            return "No se encontraron documentos relevantes."
-
-        candidados = response.data
-        resultados_finales = []
-
-        # 4. Reranking / Filtrado Lógico (Python-side Hybrid Search)
-        if keywords:
-            # Si hay keywords (ej: "550"), priorizamos los docs que las tengan
-            prioritarios = []
-            otros = []
-            
-            for doc in candidados:
-                contenido = doc.get('content', '').upper()
-                # Chequeamos si alguna keyword está en el contenido
-                if any(k in contenido for k in keywords):
-                    prioritarios.append(doc)
-                else:
-                    otros.append(doc)
-            
-            # Ordenamos: primero los que tienen match exacto, luego el resto
-            resultados_finales = prioritarios + otros
-        else:
-            resultados_finales = candidados
-
-        # 5. Formatear respuesta (Top 5 mejores)
-        contexto = f"--- RESULTADOS DOCUMENTOS (Top {min(5, len(resultados_finales))}) ---\n"
-        for doc in resultados_finales[:5]:
-            archivo = doc.get('metadata', {}).get('source', 'Desconocido')
-            # Limpiamos saltos de línea excesivos para ahorrar tokens
-            contenido = doc.get('content', '').replace('\n', ' ').strip()
-            contexto += f"📄 FUENTE: {archivo}\nCONTENIDO: ...{contenido[:800]}...\n\n"
-            
-        return contexto
-
-    except Exception as e:
-        logger.error(f"Error biblioteca: {e}")
-        return f"Error consultando documentos: {str(e)}"
+def obtener_historial_actas():
+    # Wrapper simple para el endpoint REST si se necesita directo
+    return supabase.table("actas_reunion").select("*").order("created_at", desc=True).limit(10).execute().data
