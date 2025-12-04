@@ -61,7 +61,7 @@ def consultar_actas_reuniones(query: str):
             fecha = a.get('created_at', '')[:10]
             titulo = a.get('titulo', 'Sin título')
             # Preferimos el resumen IA, si no, un trozo de transcripción
-            contenido = a.get('resumen_ia') or (a.get('transcripcion', '')[:200] + "...")
+            contenido = a.get('resumen_ia') or (a.get('transcripcion', '')[:500] + "...")
             texto += f"- ID {a.get('id')} [{fecha}] {titulo}: {contenido}\n"
         return texto
     except Exception as e:
@@ -81,13 +81,12 @@ def consultar_biblioteca_documentos(pregunta: str):
         vector_pregunta = embeddings_model.embed_query(pregunta)
         
         # 2. Búsqueda Semántica en Supabase (RPC)
-        # Nota: Requiere que la función 'buscar_documentos' exista en tu Supabase.
         response = supabase.rpc(
             "buscar_documentos", 
             {
                 "query_embedding": vector_pregunta,
-                "match_threshold": 0.40, # Umbral de similitud (0 a 1)
-                "match_count": 8         # Traemos más candidatos para filtrar luego
+                "match_threshold": 0.30, # (CAMBIO) Bajamos umbral para ser más tolerantes
+                "match_count": 15        # (CAMBIO) Traemos más candidatos iniciales (antes 8)
             }
         ).execute()
         
@@ -97,34 +96,34 @@ def consultar_biblioteca_documentos(pregunta: str):
         candidatos = response.data
         
         # 3. Re-Ranking Lógico (Python-side)
-        # Si la pregunta menciona un archivo específico (ej: "en el presupuesto"),
-        # priorizamos chunks cuyo 'source' coincida.
         palabras_clave = [w.lower() for w in pregunta.split() if len(w) > 4]
         
         def score_extra(doc):
             # Damos puntos extra si el nombre del archivo está en la pregunta
             source = doc.get('metadata', {}).get('source', '').lower()
             if any(p in source for p in palabras_clave):
-                return 10
+                return 15 # (CAMBIO) Aumentamos el peso del bonus
             return 0
 
         # Ordenamos por (Score Semántico original + Bonus de nombre de archivo)
-        # Asumimos que RPC devuelve 'similarity'.
         candidatos.sort(key=lambda x: x.get('similarity', 0) + score_extra(x), reverse=True)
 
         # 4. Formatear Respuesta para el Agente
-        # Tomamos los Top 4 definitivos
-        top_docs = candidatos[:4]
+        # (CAMBIO) Tomamos los Top 8 definitivos (antes 4) para dar más contexto
+        top_docs = candidatos[:8]
         
-        contexto = f"--- RESULTADOS DE BÚSQUEDA ({len(top_docs)} fragmentos) ---\n"
+        contexto = f"--- RESULTADOS DE BÚSQUEDA ({len(top_docs)} fragmentos más relevantes) ---\n"
+        contexto += "Instrucción: Usa esta información detallada para responder al usuario.\n\n"
+
         for i, doc in enumerate(top_docs):
             fuente = doc.get('metadata', {}).get('source', 'Desconocido')
-            # Limpiamos saltos excesivos para ahorrar tokens
-            contenido = doc.get('content', '').replace('\n', ' ').strip()
-            # Cortamos si es muy largo
-            if len(contenido) > 1000: contenido = contenido[:1000] + "..."
+            pagina = doc.get('metadata', {}).get('page', '?') # Info de página si existe
             
-            contexto += f"📄 [Doc {i+1}] FUENTE: {fuente}\nCONTENIDO: {contenido}\n\n"
+            # (CAMBIO CRÍTICO) Eliminamos el recorte de 1000 caracteres.
+            # Pasamos el contenido completo del chunk.
+            contenido = doc.get('content', '').strip()
+            
+            contexto += f"📄 [Fragmento {i+1}] FUENTE: {fuente} (Pág: {pagina})\nCONTENIDO:\n{contenido}\n{'-'*40}\n"
             
         return contexto
 
