@@ -3,17 +3,14 @@ import logging
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, UploadFile, File, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse  # <--- NUEVO: Para Streaming
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
-from typing import List, Optional, Generator
-
+from typing import List, Optional
 
 from agents.main_agent import get_agent_response
 from tools.dashboard import (
     get_data_cliente_formatted,
-    get_data_ministerio_formatted,
-    obtener_datos_raw,
-    SHEET_CLIENTE_ID
+    get_data_ministerio_formatted
 )
 from tools.docs import procesar_archivo_subido 
 from tools.audio import procesar_audio_gemini
@@ -29,7 +26,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger("backend_main")
 
-app = FastAPI(title="MinCYT AI Dashboard", version="2.0.0")
+app = FastAPI(title="MinCYT AI Dashboard", version="2.1.0")
 
 # --- CONFIGURACIÓN CORS (SEGURIDAD) ---
 origins = [
@@ -69,22 +66,26 @@ class ChatRequest(BaseModel):
 
 @app.get("/")
 def read_root():
-    return {"status": "online", "system": "MinCYT Dashboard & AI v2.0"}
+    return {"status": "online", "system": "MinCYT Dashboard & AI v2.1"}
 
 @app.post("/api/chat")
 async def chat_endpoint(request: ChatRequest):
     """
-    Endpoint optimizado con Sistema de Sesiones Persistentes
+    Endpoint optimizado con Sistema de Sesiones Persistentes y Auto-Corrección de IDs
     """
     async def generate_response_stream():
         try:
-            # 🆕 GESTIÓN DE SESIONES
+            # 🆕 GESTIÓN DE SESIONES (CORREGIDA)
             session_id = request.session_id
-            if not session_id:
+            
+            # DETECTOR DE "CREDENCIAL FALSA":
+            # Si no hay sesión O si empieza con "local-", creamos una REAL en la base de datos.
+            if not session_id or str(session_id).startswith("local-"):
                 # Crear nueva sesión automáticamente
                 titulo_sesion = f"Chat: {request.message[:30]}..."
                 session_id = session_manager.crear_nueva_sesion(request.user_id, titulo_sesion)
-                # Informar al frontend del nuevo session_id
+                
+                # 📢 AVISO AL FRONTEND: "Usa este ID nuevo a partir de ahora"
                 yield f"data: SESSION_ID:{session_id}\n\n"
             
             # 🆕 RECUPERAR HISTORIAL DE SESIÓN
@@ -128,12 +129,12 @@ async def chat_endpoint(request: ChatRequest):
                 respuesta_completa = respuesta
                 yield f"data: {respuesta}\n\n"
             
-            # 🆕 GUARDAR LA CONVERSACIÓN
+            # 🆕 GUARDAR LA CONVERSACIÓN CON EL ID VÁLIDO (UUID)
             session_manager.guardar_mensaje(
                 sesion_id=session_id,
                 mensaje_usuario=request.message,
                 respuesta_bot=respuesta_completa,
-                herramientas_usadas=[]  # TODO: capturar desde el agente
+                herramientas_usadas=[] 
             )
 
         except Exception as e:
