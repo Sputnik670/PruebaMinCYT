@@ -240,10 +240,25 @@ export const ChatInterface: React.FC = () => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    if (file.type !== 'application/pdf') {
-        alert("Solo se permiten archivos PDF");
+    // --- NUEVA VALIDACIÓN (SOPORTE WORD/TXT) ---
+    const allowedTypes = [
+        'application/pdf', 
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document', // .docx
+        'application/msword', // .doc
+        'text/plain' // .txt
+    ];
+    
+    // Check extra por extensión por si el navegador no detecta bien el MIME type
+    const isValid = allowedTypes.includes(file.type) || 
+                    file.name.toLowerCase().endsWith('.docx') ||
+                    file.name.toLowerCase().endsWith('.doc') ||
+                    file.name.toLowerCase().endsWith('.txt');
+
+    if (!isValid) {
+        alert("Formato no soportado. Sube PDF, Word (.docx/.doc) o TXT.");
         return;
     }
+    // ---------------------------------------------
 
     setIsUploading(true);
     
@@ -356,17 +371,17 @@ export const ChatInterface: React.FC = () => {
           
           <input 
             type="file" 
-            accept="application/pdf" 
+            accept=".pdf,.docx,.doc,.txt" 
             ref={fileInputRef} 
             onChange={handleFileChange} 
             className="hidden" 
-            aria-label="Subir documento PDF" 
+            aria-label="Subir documento" 
           />
           <button
             onClick={handleFileClick}
             disabled={isLoading || isUploading || isRecording}
             className="flex-shrink-0 p-3 rounded-full mb-1 text-slate-500 hover:bg-slate-200 transition-colors"
-            title="Adjuntar PDF"
+            title="Adjuntar Archivo (PDF/Word/TXT)"
           >
             <Paperclip size={20} />
           </button>
