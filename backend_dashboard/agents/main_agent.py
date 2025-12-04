@@ -1,6 +1,7 @@
 import os
 import logging
 from datetime import datetime
+from zoneinfo import ZoneInfo  # <--- 1. NUEVO IMPORT
 import locale
 import operator
 from typing import List, Any, TypedDict, Annotated
@@ -31,68 +32,74 @@ llm = ChatGoogleGenerativeAI(model="models/gemini-2.0-flash-001", temperature=0,
 
 def get_memory_aware_history(history_list):
     """
-    Recupera el historial de chat de forma segura, manejando tanto
-    Diccionarios (base de datos) como Objetos Pydantic (frontend).
+    Recupera el historial de chat de forma segura.
+    Mantenemos ConversationSummaryBufferMemory porque priorizas la ROBUSTEZ.
+    Esto asegura que el bot tenga "memoria fotográfica" de lo reciente y "contexto general" de lo antiguo.
     """
     chat_history = ChatMessageHistory()
     
-    # Procesamos todo menos el último mensaje (que es el actual)
+    # Procesamos todo menos el último mensaje
     for msg in (history_list[:-1] if history_list else []):
-        # --- CORRECCIÓN CRÍTICA AQUÍ ---
-        # Verificamos si es diccionario antes de usar .get()
         if isinstance(msg, dict):
             txt = msg.get('text', '')
             sender = msg.get('sender', '')
         else:
-            # Si es objeto (Pydantic), usamos getattr
             txt = getattr(msg, 'text', '')
             sender = getattr(msg, 'sender', '')
-        # -------------------------------
 
         if sender == 'user': 
             chat_history.add_user_message(txt)
         else: 
             chat_history.add_ai_message(txt)
     
+    # Aumentamos el límite de tokens para garantizar más contexto preciso antes de resumir
     mem = ConversationSummaryBufferMemory(
         llm=llm, 
         chat_memory=chat_history, 
-        max_token_limit=1500, 
+        max_token_limit=3000, # <--- AUMENTADO (antes 1500) para más precisión histórica
         return_messages=True, 
         memory_key="chat_history"
     )
     return mem.load_memory_variables({})["chat_history"]
 
+# --- 2. CÁLCULO DE FECHA LOCAL ---
+def obtener_fecha_hora_local():
+    tz = ZoneInfo("America/Argentina/Buenos_Aires")
+    ahora = datetime.now(tz)
+    # Formato amigable para el LLM: "Jueves 25 de Mayo, 14:30 hs"
+    return ahora.strftime("%A %d/%m/%Y, %H:%M hs")
+
 # --- PROMPT DEL MANAGER (ROUTER / ORQUESTADOR) ---
-sys_prompt = f"""Eres el **Director de Operaciones (COO)** del MinCYT. Hoy es {datetime.now().strftime("%d/%m/%Y")}.
+# Inyectamos la función de hora en el prompt dinámicamente
+sys_prompt = f"""Eres el **Director de Operaciones (COO)** del MinCYT.
+📅 **FECHA Y HORA ACTUAL (Argentina):** {obtener_fecha_hora_local()}
 
 TU ROL: No eres un asistente básico. Eres un orquestador de alto nivel.
-TU OBJETIVO: Recibir solicitudes complejas del usuario y asignar la tarea al **DEPARTAMENTO (Herramienta)** correcto.
+TU OBJETIVO: Recibir solicitudes complejas y asignar la tarea al **DEPARTAMENTO (Herramienta)** correcto.
 
 TIENES 4 DEPARTAMENTOS A TU CARGO:
 
 1. 📊 **DEPARTAMENTO DE DATOS Y FINANZAS (Tool: `analista_de_datos_cliente`)**
-   - **Misión:** Manejar Excel, CSV, Google Sheets.
-   - **Cuándo llamar:** "Calcula el total", "Promedio de gastos", "Filtrar viajes a Córdoba", "¿Cuánto gastamos en viáticos?".
-   - **Capacidad:** Realiza cálculos matemáticos precisos usando Python/Pandas.
+   - **Misión:** Cálculos matemáticos, Excel, CSV.
+   - **Cuándo llamar:** "Total gastos", "Filtrar por X", "Promedios".
+   - **Regla:** Si no tienes el dato exacto, responde: "No tengo esa información en la base de datos". NO INVENTES.
 
 2. 🗄️ **DEPARTAMENTO LEGAL Y DOCUMENTAL (Tool: `consultar_biblioteca_documentos`)**
-   - **Misión:** Leer PDFs, Words y Normativas.
-   - **Cuándo llamar:** "¿Qué dice el expediente X?", "Busca la resolución 550", "Resumen del documento adjunto", "Contexto legal".
-   - **Capacidad:** Búsqueda semántica (RAG) en documentos no estructurados.
+   - **Misión:** Leer PDFs, Words y Normativas (Búsqueda Semántica).
+   - **Cuándo llamar:** "¿Qué dice el documento X?", "Resumen de la ley...", "Buscar en archivos".
 
 3. 🌐 **DEPARTAMENTO DE INVESTIGACIÓN (Tool: `tavily_search_results_json`)**
-   - **Misión:** Buscar información externa en tiempo real.
-   - **Cuándo llamar:** "Busca noticias sobre...", "¿Quién es el actual ministro?", "Cotización del dólar hoy", "Información pública".
+   - **Misión:** Buscar información externa en internet.
+   - **Cuándo llamar:** Noticias, cotizaciones, información pública actual.
 
-4. 📅 **SECRETARÍA EJECUTIVA (Tools: `agendar_reunion_oficial`, `crear_borrador_email`, `consultar_calendario_ministerio`)**
+4. 📅 **SECRETARÍA EJECUTIVA (Tools: `agendar_reunion_oficial`, `crear_borrador_email`)**
    - **Misión:** Ejecutar acciones reales.
-   - **Cuándo llamar:** "Agenda una reunión", "Manda un correo", "¿Qué tengo en la agenda hoy?".
+   - **Cuándo llamar:** "Agenda reunión", "Manda correo".
+   - **Regla:** Para agendar, usa SIEMPRE la fecha/hora actual ({obtener_fecha_hora_local()}) como referencia si dicen "mañana" o "el lunes".
 
 REGLAS DE MANDO:
-- **NO INTENTES RESPONDER TÚ MISMO** si la información no está en la charla actual. DELEGA SIEMPRE.
-- Si te piden un cálculo financiero, **está prohibido** inventar números; llama al `analista_de_datos_cliente`.
-- Si te piden enviar un correo, usa `crear_borrador_email` primero para confirmar.
+- **NO INTENTES RESPONDER TÚ MISMO** si la información requiere herramientas. DELEGA.
+- Si te piden enviar un correo, usa `crear_borrador_email` primero para confirmación.
 """
 
 # Lista de herramientas
@@ -114,7 +121,15 @@ llm_with_tools = llm.bind_tools(tools)
 class State(TypedDict): messages: Annotated[List[BaseMessage], operator.add]
 
 def call_model(s): 
-    return {"messages": [llm_with_tools.invoke(s['messages'])]}
+    # Actualizamos el prompt de sistema en cada llamada para que la hora esté fresca
+    msgs = s['messages']
+    # Si el primer mensaje es System, lo actualizamos. Si no, lo insertamos.
+    if isinstance(msgs[0], SystemMessage):
+        msgs[0] = SystemMessage(content=sys_prompt)
+    else:
+        msgs.insert(0, SystemMessage(content=sys_prompt))
+        
+    return {"messages": [llm_with_tools.invoke(msgs)]}
 
 def route(s): 
     return "tools" if s['messages'][-1].tool_calls else END
@@ -129,8 +144,12 @@ app = wf.compile()
 
 def get_agent_response(msg, hist=[]):
     try:
+        # Recuperamos historial con memoria inteligente
+        memory_messages = get_memory_aware_history(hist)
+        
+        # Invocamos el grafo
         res = app.invoke(
-            {"messages": [SystemMessage(content=sys_prompt)] + get_memory_aware_history(hist) + [HumanMessage(content=msg)]}, 
+            {"messages": memory_messages + [HumanMessage(content=msg)]}, 
             config={"recursion_limit": 20}
         )
         return res["messages"][-1].content
