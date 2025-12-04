@@ -17,11 +17,12 @@ from langgraph.prebuilt import ToolNode
 from langchain.memory import ConversationSummaryBufferMemory
 from langchain_community.chat_message_histories import ChatMessageHistory
 
-# Importación de herramientas
+# --- IMPORTACIÓN DE HERRAMIENTAS ---
 from tools.general import get_search_tool
 from tools.email import crear_borrador_email
 from tools.database import consultar_actas_reuniones, consultar_biblioteca_documentos
-from tools.dashboard import consultar_calendario_ministerio, consultar_calendario_cliente
+# (CAMBIO) Eliminamos las herramientas crudas de aquí. 
+# El agente solo debe ver al "Analista" para evitar confusiones.
 from tools.analysis import analista_de_datos_cliente
 from tools.actions import agendar_reunion_oficial, enviar_email_real
 
@@ -56,7 +57,7 @@ def get_memory_aware_history(history_list):
     mem = ConversationSummaryBufferMemory(
         llm=llm, 
         chat_memory=chat_history, 
-        max_token_limit=3000, # <--- AUMENTADO (antes 1500) para más precisión histórica
+        max_token_limit=3000, 
         return_messages=True, 
         memory_key="chat_history"
     )
@@ -102,11 +103,11 @@ REGLAS DE MANDO:
 - Si te piden enviar un correo, usa `crear_borrador_email` primero para confirmación.
 """
 
-# Lista de herramientas
+# (CAMBIO CRÍTICO) Lista de herramientas LIMPIA
+# Quitamos consultar_calendario_ministerio y consultar_calendario_cliente
+# para forzar el uso del analista_de_datos_cliente (que tiene la data unificada).
 tools = [
     analista_de_datos_cliente, 
-    consultar_calendario_ministerio, 
-    consultar_calendario_cliente, 
     consultar_biblioteca_documentos, 
     consultar_actas_reuniones, 
     crear_borrador_email, 
