@@ -51,21 +51,31 @@ def leer_excel_drive(file_id, creds):
         xls = pd.ExcelFile(file_stream)
         datos = []
         
+        # LISTA AMPLIADA DE PALABRAS CLAVE PARA DETECTAR EL HEADER
+        keywords_header = ['FECHA', 'DIA', 'HORA', 'INICIO', 'EVENTO', 'ACTIVIDAD', 'TEMA', 'TITULO', 'DESCRIPCION', 'LUGAR', 'UBICACION', 'DESTINO']
+
         for sheet_name in xls.sheet_names:
-            # Detectar header real (Buscamos 'FECHA' y 'LUGAR')
-            df_raw = pd.read_excel(xls, sheet_name=sheet_name, header=None, nrows=15)
+            # Leemos las primeras 20 filas para buscar el header
+            df_raw = pd.read_excel(xls, sheet_name=sheet_name, header=None, nrows=20)
             header_idx = 0
+            
             for i, row in df_raw.iterrows():
+                # Limpiamos la fila para comparar
                 row_str = row.astype(str).str.upper().str.replace('\n', '').tolist()
-                if any('FECHA' in s for s in row_str) and any('LUGAR' in s for s in row_str):
+                
+                # Contamos cuántas palabras clave aparecen en esta fila
+                matches = sum(1 for k in keywords_header if any(k in s for s in row_str))
+                
+                # CORRECCIÓN: Si encontramos al menos 2 coincidencias, es el header
+                if matches >= 2:
                     header_idx = i
+                    logger.info(f"✅ Header detectado en fila {i} (Hoja: {sheet_name})")
                     break
             
             # Cargar datos con header correcto
             df = pd.read_excel(xls, sheet_name=sheet_name, header=header_idx, dtype=str).fillna("")
             
             # Limpieza agresiva de nombres de columnas
-            # "COSTO DEL \n TRASLADO" -> "COSTODELTRASLADO"
             df.columns = [re.sub(r'[^A-Z0-9]', '', str(col).upper()) for col in df.columns]
             
             records = df.to_dict(orient='records')
@@ -84,12 +94,7 @@ def obtener_datos_sheet_cached(sid, gid=None):
     return leer_excel_drive(sid, creds)
 
 def procesar_fila_cliente(fila):
-    """
-    Mapeo usando claves 100% limpias (solo letras y números).
-    """
-    # fila ya viene con claves limpias desde leer_excel_drive (ej: 'COSTODELTRASLADO')
-    # pero por seguridad volvemos a limpiar al buscar
-    
+    """Mapeo Gestión Interna"""
     def get_val(keys_list):
         for k in keys_list:
             if k in fila: return fila[k]
@@ -101,16 +106,33 @@ def procesar_fila_cliente(fila):
         "FUNCIONARIO": get_val(["NOMBRE", "FUNCIONARIO", "APELLIDOYNOMBRE"]),
         "INSTITUCION": get_val(["INSTITUCION", "INSTITUCIÓN", "ORGANISMO"]),
         "MOTIVO_EVENTO": get_val(["MOTIVO", "EVENTO", "MOTIVOEVENTO"]),
-        
-        # COSTO: Clave limpia es COSTODELTRASLADO
         "COSTO_TRASLADO": get_val(["COSTODELTRASLADO", "COSTO", "PRECIO", "VALOR"]),
-        
-        # EXPEDIENTE: Clave limpia es EE. Agregamos variantes por si acaso.
         "NUMERO_EXPEDIENTE": get_val(["EE", "EXPEDIENTE", "EXP", "NROEXPEDIENTE", "NROEE"]) or "No especificado",
-        
         "ESTADO_TRAMITE": get_val(["ESTADO", "ESTADODELTRAMITE"]),
         "AUTORIZACION": get_val(["AUTORIZACION", "AUTORIZACIÓN"]),
         "RENDICION": get_val(["RENDICION", "RENDICIÓN"])
+    }
+
+def procesar_fila_ministerio(fila):
+    """
+    Intenta normalizar las columnas de la agenda pública buscando sinónimos.
+    """
+    def get_val(keys_list):
+        # 1. Búsqueda exacta
+        for k in keys_list:
+            if k in fila: return fila[k]
+        
+        # 2. Búsqueda parcial (fallback vital)
+        for k in keys_list:
+            for col_real in fila.keys():
+                if k in col_real: 
+                    return fila[col_real]
+        return ""
+
+    return {
+        "FECHA": get_val(["FECHA", "DIA", "INICIO", "DATE"]),
+        "EVENTO": get_val(["EVENTO", "ACTIVIDAD", "TEMA", "TITULO", "DESC", "ASUNTO", "NOMBRE", "MOTIVO"]),
+        "LUGAR": get_val(["LUGAR", "UBICACION", "SALA", "DESTINO", "DONDE"])
     }
 
 def get_data_cliente_formatted():
@@ -119,7 +141,7 @@ def get_data_cliente_formatted():
 
 def get_data_ministerio_formatted():
     raw = obtener_datos_sheet_cached(SHEET_MINISTERIO_ID, WORKSHEET_MINISTERIO_GID)
-    return [{"FECHA": str(r.get("FECHA","")), "EVENTO": str(r.get("EVENTO",""))} for r in raw] # Ajuste simple
+    return [procesar_fila_ministerio(r) for r in raw]
 
 def obtener_datos_raw():
     return get_data_cliente_formatted() + get_data_ministerio_formatted()

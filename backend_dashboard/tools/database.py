@@ -98,12 +98,14 @@ def consultar_actas_reuniones(query: str):
 @tool
 def consultar_biblioteca_documentos(pregunta: str):
     """
-    Busca en documentos PDF/Excel subidos.
-    Usa búsqueda híbrida (Semántica + Palabras Clave) para mayor precisión.
+    [ANALISTA 1: LEGAL Y DOCUMENTAL]
+    ÚSALA para buscar información cualitativa, legal, conceptual o resúmenes en documentos (PDF/Word).
+    - Búsqueda de cláusulas, expedientes específicos, resoluciones, leyes o temas de texto.
+    - Úsala si preguntan "¿Qué dice el documento X?" o "Busca información sobre...".
+    - NO la uses para cálculos matemáticos, sumas de dinero o agenda (usa al Analista 2 para eso).
     """
     try:
         # 1. Extraer palabras clave críticas (Números, Apellidos, Códigos)
-        # Usamos una regex simple para capturar números de expedientes o años
         keywords = re.findall(r'\b\d{3,}\b|\b[A-Z]{2,}\b', pregunta.upper())
         
         # 2. Vectorizar pregunta original

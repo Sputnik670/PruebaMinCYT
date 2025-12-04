@@ -77,38 +77,40 @@ def get_df_optimizado():
 @tool
 def analista_de_datos_cliente(consulta: str):
     """
-    ÚSALA para responder sobre:
-    - Gastos, Costos, Presupuesto (en ARS, USD, EUR).
-    - Fechas, Meses (ej: "gastos de diciembre").
-    - Expedientes, Funcionarios, Destinos.
-    - Esta herramienta tiene los datos de 'Gestión Interna'.
+    [ANALISTA 2: DATOS DUROS Y FINANZAS]
+    ÚSALA EXCLUSIVAMENTE para cálculos matemáticos, financieros o fechas exactas sobre la "Gestión Interna".
+    - Sumar gastos, calcular promedios, buscar montos específicos.
+    - Filtrar por fechas exactas (meses, años) o destinos.
+    - NO la uses para resúmenes de texto cualitativo o documentos legales.
     """
     try:
         df = get_df_optimizado()
         if df.empty: return "Error: No hay datos disponibles en la tabla de Gestión Interna."
 
+        # Usamos temperatura 0 para máxima precisión matemática
         llm = ChatGoogleGenerativeAI(model="models/gemini-2.0-flash-001", temperature=0)
         
         prefix = f"""
-        Eres un Experto en Datos. Analizas un DataFrame `df` con {len(df)} registros.
-        ESTOS DATOS CORRESPONDEN A LA "GESTIÓN INTERNA" o "AGENDA DEL CLIENTE".
+        Eres un Analista Financiero y de Datos. Analizas un DataFrame `df` con {len(df)} registros.
+        ESTOS DATOS CORRESPONDEN A LA "GESTIÓN INTERNA" o "AGENDA DEL CLIENTE" (Viajes y Gastos).
 
-        ### COLUMNAS DISPONIBLES:
+        ### COLUMNAS CLAVE:
         - `numero_expediente`: Código del trámite.
         - `funcionario`: Nombre del viajero.
         - `destino`: Lugar.
-        - `monto_numerico` (Float): EL VALOR REAL PARA SUMAR. ÚSALO SIEMPRE.
+        - `motivo_evento`: DESCRIPCIÓN DEL TEMA O ACTIVIDAD. (Úsala solo para filtrar filas por tema).
+        - `monto_numerico` (Float): EL VALOR REAL PARA SUMAR. ÚSALO SIEMPRE PARA CÁLCULOS.
         - `moneda_detectada`: Agrupa por esto (ARS, USD, EUR). ¡NO SUMES MONEDAS DISTINTAS!
         - `fecha_dt` (Datetime): Fecha real.
         - `mes_numero` (Int): 1 a 12. Úsalo para filtrar (ej: Diciembre = 12).
         
-        ### REGLAS DE ORO:
-        1. **FECHAS**: Si piden "Diciembre", filtra: `df[df['mes_numero'] == 12]`. Si piden "mes pasado", calcula relativo a hoy.
-        2. **DINERO**: Para "gastos totales", agrupa: `df.groupby('moneda_detectada')['monto_numerico'].sum()`.
-        3. **GESTIÓN INTERNA**: Si el usuario pregunta por "datos de gestión interna", SE REFIERE A ESTE DATAFRAME. Responde directamente.
-        4. **SIN HALLAZGOS**: Si el filtro da vacío, di "No hay registros para esa fecha/criterio". No inventes.
+        ### REGLAS DE ORO (MODO CÁLCULO):
+        1. **DINERO**: Si piden "gastos totales" o "costos", agrupa por moneda: `df.groupby('moneda_detectada')['monto_numerico'].sum()`.
+        2. **FECHAS**: Si piden un mes específico (ej: "Diciembre"), filtra: `df[df['mes_numero'] == 12]`. Si piden "mes pasado", calcula relativo a la fecha actual.
+        3. **FILTRO POR TEMA**: Si piden "gastos en eventos nucleares", usa `str.contains` en `motivo_evento` y luego suma `monto_numerico`.
+        4. **PRECISIÓN**: Si el filtro da vacío, responde "No hay registros financieros para ese criterio". No inventes datos.
 
-        Pregunta: {consulta}
+        Pregunta del usuario: {consulta}
         """
 
         agent = create_pandas_dataframe_agent(
