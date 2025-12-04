@@ -40,7 +40,8 @@ def get_creds():
     }
     return service_account.Credentials.from_service_account_info(creds_dict, scopes=["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"])
 
-# --- FUNCIÓN DE LIMPIEZA SEGURA ---
+# --- FUNCIONES DE LIMPIEZA ---
+
 def limpiar_nombre_columna(col_name):
     """
     Convierte 'Título' -> 'TITULO', 'Fecha inicio' -> 'FECHAINICIO'
@@ -48,10 +49,20 @@ def limpiar_nombre_columna(col_name):
     """
     if not col_name: return ""
     s = str(col_name).upper()
-    # Normalizar (eliminar acentos: Í -> I)
     s = ''.join(c for c in unicodedata.normalize('NFD', s) if unicodedata.category(c) != 'Mn')
-    # Eliminar todo lo que no sea letra o número
     return re.sub(r'[^A-Z0-9]', '', s)
+
+def formatear_fecha_sin_hora(valor):
+    """
+    Elimina el sufijo ' 00:00:00' que Pandas agrega a veces a las fechas.
+    Entrada: '2025-01-20 00:00:00' -> Salida: '2025-01-20'
+    """
+    if not valor: return ""
+    texto = str(valor)
+    # Si contiene el timestamp de medianoche, lo quitamos
+    if " 00:00:00" in texto:
+        return texto.replace(" 00:00:00", "").strip()
+    return texto
 
 def leer_excel_drive(file_id, creds):
     try:
@@ -73,15 +84,11 @@ def leer_excel_drive(file_id, creds):
         ]
 
         for sheet_name in xls.sheet_names:
-            # Leemos un trozo para encontrar el header
             df_raw = pd.read_excel(xls, sheet_name=sheet_name, header=None, nrows=20)
             header_idx = -1
             
             for i, row in df_raw.iterrows():
-                # Limpiamos la fila actual para ver si parece un header
                 row_str = [limpiar_nombre_columna(x) for x in row.astype(str).tolist()]
-                
-                # Buscamos coincidencias (ahora TITULO coincidirá con TITULO)
                 matches = sum(1 for k in keywords_header if any(k in s for s in row_str))
                 
                 if matches >= 2:
@@ -93,10 +100,7 @@ def leer_excel_drive(file_id, creds):
                 logger.warning(f"⚠️ No se encontró header en {sheet_name}, saltando.")
                 continue
 
-            # Cargar datos reales
             df = pd.read_excel(xls, sheet_name=sheet_name, header=header_idx, dtype=str).fillna("")
-            
-            # Limpieza segura de columnas
             df.columns = [limpiar_nombre_columna(col) for col in df.columns]
             
             records = df.to_dict(orient='records')
@@ -123,8 +127,11 @@ def procesar_fila_cliente(fila):
                 if k in col_real: return fila[col_real]
         return ""
 
+    # APLICAMOS LIMPIEZA DE HORA
+    raw_fecha = formatear_fecha_sin_hora(get_val(["FECHA", "INICIO", "SALIDA"]))
+
     item = {
-        "FECHA_VIAJE": get_val(["FECHA", "INICIO", "SALIDA"]),
+        "FECHA_VIAJE": raw_fecha,
         "DESTINO": get_val(["LUGAR", "DESTINO", "CIUDAD"]),
         "FUNCIONARIO": get_val(["NOMBRE", "FUNCIONARIO", "PARTICIPANTE"]),
         "INSTITUCION": get_val(["INSTITUCION", "ORGANISMO"]),
@@ -142,7 +149,6 @@ def procesar_fila_cliente(fila):
 def procesar_fila_ministerio(fila):
     """
     Normaliza las columnas de la agenda pública (Calendarios Internacionales).
-    AHORA CON VISIÓN COMPLETA (Lee Organizador, Participante, Ámbito, etc.)
     """
     def get_val(keys_list):
         for k in keys_list:
@@ -151,18 +157,18 @@ def procesar_fila_ministerio(fila):
                 if k in col_real: return fila[col_real]
         return ""
 
-    # 1. Campos Básicos
-    raw_fecha = get_val(["FECHA", "INICIO", "DIA", "DESDE"])
+    # APLICAMOS LIMPIEZA DE HORA
+    raw_fecha = formatear_fecha_sin_hora(get_val(["FECHA", "INICIO", "DIA", "DESDE"]))
+    
     raw_evento = get_val(["TITULO", "EVENTO", "ACTIVIDAD", "TEMA", "NOMBRE"])
     raw_lugar = get_val(["LUGAR", "UBICACION", "DESTINO", "PAIS", "CIUDAD"])
     
-    # 2. Campos Nuevos (Para mayor precisión)
+    # Campos adicionales (Visión Ampliada)
     raw_organizador = get_val(["ORGANIZADOR", "INVITA", "ORGANIZA"])
     raw_participante = get_val(["PARTICIPANTE", "FUNCIONARIO", "QUIEN"])
     raw_observaciones = get_val(["OBSERVACIONES", "NOTAS", "DETALLE"])
-    raw_ambito = get_val(["NACINTL", "AMBITO", "TIPO"]) # Nacional o Internacional
+    raw_ambito = get_val(["NACINTL", "AMBITO", "TIPO"]) 
 
-    # Filtro anti-basura
     llenos = sum(1 for x in [raw_fecha, raw_evento, raw_lugar] if len(str(x)) > 2)
     if llenos < 2:
         return None
@@ -171,7 +177,6 @@ def procesar_fila_ministerio(fila):
         "FECHA": raw_fecha,
         "EVENTO": raw_evento,
         "LUGAR": raw_lugar,
-        # Agregamos los nuevos al diccionario
         "ORGANIZADOR": raw_organizador,
         "PARTICIPANTE": raw_participante,
         "OBSERVACIONES": raw_observaciones,
