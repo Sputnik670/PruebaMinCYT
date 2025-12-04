@@ -4,6 +4,7 @@ import gspread
 import logging
 import io
 import re
+import unicodedata  # <--- NUEVO: Para manejar acentos
 import pandas as pd
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
@@ -39,6 +40,19 @@ def get_creds():
     }
     return service_account.Credentials.from_service_account_info(creds_dict, scopes=["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"])
 
+# --- NUEVA FUNCIÓN DE LIMPIEZA SEGURA ---
+def limpiar_nombre_columna(col_name):
+    """
+    Convierte 'Título' -> 'TITULO', 'Fecha inicio' -> 'FECHAINICIO'
+    Elimina acentos y caracteres especiales pero mantiene las letras.
+    """
+    if not col_name: return ""
+    s = str(col_name).upper()
+    # Normalizar (eliminar acentos: Í -> I)
+    s = ''.join(c for c in unicodedata.normalize('NFD', s) if unicodedata.category(c) != 'Mn')
+    # Eliminar todo lo que no sea letra o número
+    return re.sub(r'[^A-Z0-9]', '', s)
+
 def leer_excel_drive(file_id, creds):
     try:
         service = build('drive', 'v3', credentials=creds)
@@ -51,32 +65,35 @@ def leer_excel_drive(file_id, creds):
         xls = pd.ExcelFile(file_stream)
         datos = []
         
-        # LISTA AMPLIADA DE PALABRAS CLAVE PARA DETECTAR EL HEADER
-        keywords_header = ['FECHA', 'DIA', 'HORA', 'INICIO', 'EVENTO', 'ACTIVIDAD', 'TEMA', 'TITULO', 'DESCRIPCION', 'LUGAR', 'UBICACION', 'DESTINO']
+        # Palabras clave ampliadas para detectar dónde empieza la tabla
+        keywords_header = ['FECHA', 'DIA', 'INICIO', 'EVENTO', 'ACTIVIDAD', 'TITULO', 'LUGAR', 'DESTINO', 'NACINTL']
 
         for sheet_name in xls.sheet_names:
-            # Leemos las primeras 20 filas para buscar el header
+            # Leemos un trozo para encontrar el header
             df_raw = pd.read_excel(xls, sheet_name=sheet_name, header=None, nrows=20)
-            header_idx = 0
+            header_idx = -1
             
             for i, row in df_raw.iterrows():
-                # Limpiamos la fila para comparar
-                row_str = row.astype(str).str.upper().str.replace('\n', '').tolist()
+                # Limpiamos la fila actual para ver si parece un header
+                row_str = [limpiar_nombre_columna(x) for x in row.astype(str).tolist()]
                 
-                # Contamos cuántas palabras clave aparecen en esta fila
+                # Buscamos coincidencias (ahora TITULO coincidirá con TITULO)
                 matches = sum(1 for k in keywords_header if any(k in s for s in row_str))
                 
-                # CORRECCIÓN: Si encontramos al menos 2 coincidencias, es el header
                 if matches >= 2:
                     header_idx = i
                     logger.info(f"✅ Header detectado en fila {i} (Hoja: {sheet_name})")
                     break
             
-            # Cargar datos con header correcto
+            if header_idx == -1:
+                logger.warning(f"⚠️ No se encontró header en {sheet_name}, saltando.")
+                continue
+
+            # Cargar datos reales
             df = pd.read_excel(xls, sheet_name=sheet_name, header=header_idx, dtype=str).fillna("")
             
-            # Limpieza agresiva de nombres de columnas
-            df.columns = [re.sub(r'[^A-Z0-9]', '', str(col).upper()) for col in df.columns]
+            # Limpieza segura de columnas
+            df.columns = [limpiar_nombre_columna(col) for col in df.columns]
             
             records = df.to_dict(orient='records')
             for r in records: r["_ORIGEN"] = sheet_name
@@ -97,51 +114,70 @@ def procesar_fila_cliente(fila):
     """Mapeo Gestión Interna"""
     def get_val(keys_list):
         for k in keys_list:
+            # Búsqueda exacta
             if k in fila: return fila[k]
+            # Búsqueda parcial (ej: FECHA en FECHADEINICIO)
+            for col_real in fila.keys():
+                if k in col_real: return fila[col_real]
         return ""
 
-    return {
-        "FECHA_VIAJE": get_val(["FECHA", "FECHADESALIDA"]),
+    item = {
+        "FECHA_VIAJE": get_val(["FECHA", "INICIO", "SALIDA"]),
         "DESTINO": get_val(["LUGAR", "DESTINO", "CIUDAD"]),
-        "FUNCIONARIO": get_val(["NOMBRE", "FUNCIONARIO", "APELLIDOYNOMBRE"]),
-        "INSTITUCION": get_val(["INSTITUCION", "INSTITUCIÓN", "ORGANISMO"]),
-        "MOTIVO_EVENTO": get_val(["MOTIVO", "EVENTO", "MOTIVOEVENTO"]),
-        "COSTO_TRASLADO": get_val(["COSTODELTRASLADO", "COSTO", "PRECIO", "VALOR"]),
-        "NUMERO_EXPEDIENTE": get_val(["EE", "EXPEDIENTE", "EXP", "NROEXPEDIENTE", "NROEE"]) or "No especificado",
-        "ESTADO_TRAMITE": get_val(["ESTADO", "ESTADODELTRAMITE"]),
-        "AUTORIZACION": get_val(["AUTORIZACION", "AUTORIZACIÓN"]),
-        "RENDICION": get_val(["RENDICION", "RENDICIÓN"])
+        "FUNCIONARIO": get_val(["NOMBRE", "FUNCIONARIO", "PARTICIPANTE"]),
+        "INSTITUCION": get_val(["INSTITUCION", "ORGANISMO"]),
+        "MOTIVO_EVENTO": get_val(["MOTIVO", "EVENTO", "TITULO", "TEMA"]), # Agregado TITULO aquí
+        "COSTO_TRASLADO": get_val(["COSTO", "PRECIO", "VALOR"]),
+        "NUMERO_EXPEDIENTE": get_val(["EE", "EXPEDIENTE", "EXP"]) or "No especificado",
+        "ESTADO_TRAMITE": get_val(["ESTADO"]),
     }
+    
+    # FILTRO ANTI-BASURA: Si no hay fecha ni evento, es una fila vacía o un título de mes
+    if not item["FECHA_VIAJE"] and not item["MOTIVO_EVENTO"]:
+        return None
+        
+    return item
 
 def procesar_fila_ministerio(fila):
     """
-    Intenta normalizar las columnas de la agenda pública buscando sinónimos.
+    Intenta normalizar las columnas de la agenda pública.
     """
     def get_val(keys_list):
         # 1. Búsqueda exacta
         for k in keys_list:
             if k in fila: return fila[k]
-        
-        # 2. Búsqueda parcial (fallback vital)
+        # 2. Búsqueda parcial
         for k in keys_list:
             for col_real in fila.keys():
-                if k in col_real: 
-                    return fila[col_real]
+                if k in col_real: return fila[col_real]
         return ""
 
+    # Mapeo corregido para tu Excel específico
+    raw_fecha = get_val(["FECHA", "INICIO", "DIA"])
+    raw_evento = get_val(["TITULO", "EVENTO", "ACTIVIDAD", "TEMA"]) # 'TITULO' es clave aquí
+    raw_lugar = get_val(["LUGAR", "UBICACION", "DESTINO"])
+
+    # FILTRO ANTI-BASURA: Descartar filas que son solo nombres de meses (ej: "DICIEMBRE")
+    # Si tiene menos de 2 campos llenos, probablemente no sirve
+    llenos = sum(1 for x in [raw_fecha, raw_evento, raw_lugar] if len(str(x)) > 2)
+    if llenos < 2:
+        return None
+
     return {
-        "FECHA": get_val(["FECHA", "DIA", "INICIO", "DATE"]),
-        "EVENTO": get_val(["EVENTO", "ACTIVIDAD", "TEMA", "TITULO", "DESC", "ASUNTO", "NOMBRE", "MOTIVO"]),
-        "LUGAR": get_val(["LUGAR", "UBICACION", "SALA", "DESTINO", "DONDE"])
+        "FECHA": raw_fecha,
+        "EVENTO": raw_evento,
+        "LUGAR": raw_lugar
     }
 
 def get_data_cliente_formatted():
     raw = obtener_datos_sheet_cached(SHEET_CLIENTE_ID, WORKSHEET_CLIENTE_GID)
-    return [procesar_fila_cliente(r) for r in raw]
+    # Filtramos los Nones (filas basura)
+    return [res for r in raw if (res := procesar_fila_cliente(r)) is not None]
 
 def get_data_ministerio_formatted():
     raw = obtener_datos_sheet_cached(SHEET_MINISTERIO_ID, WORKSHEET_MINISTERIO_GID)
-    return [procesar_fila_ministerio(r) for r in raw]
+    # Filtramos los Nones (filas basura)
+    return [res for r in raw if (res := procesar_fila_ministerio(r)) is not None]
 
 def obtener_datos_raw():
     return get_data_cliente_formatted() + get_data_ministerio_formatted()
