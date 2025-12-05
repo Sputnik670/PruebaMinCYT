@@ -4,23 +4,20 @@ import { ChatInterface } from './components/ChatInterface';
 import { MeetingRecorder } from './components/MeetingRecorder';
 import { MeetingHistory } from './components/MeetingHistory'; 
 import { LayoutDashboard, RefreshCw, Eye, EyeOff, Bot, FileAudio, Building2, Briefcase } from 'lucide-react';
+import { AgendaItem } from './types/types'; // Importamos el tipo actualizado
 
-// Configuración de red segura
+// Configuración de red
 const rawUrl = import.meta.env.VITE_BACKEND_URL || "http://127.0.0.1:8000";
 const API_URL = rawUrl.replace(/\/api\/?$/, "").replace(/\/$/, "");
 
-// Definimos tipos para el estado
 type VistaType = 'cliente' | 'ministerio';
 type TabType = 'recorder' | 'history';
 
 function App() {
-  // Estado de los datos con tipado
-  const [dataMinisterio, setDataMinisterio] = useState<any[]>([]);
-  const [dataCliente, setDataCliente] = useState<any[]>([]);
+  const [dataMinisterio, setDataMinisterio] = useState<AgendaItem[]>([]);
+  const [dataCliente, setDataCliente] = useState<AgendaItem[]>([]);
   
-  // Estado de la vista
   const [vistaActual, setVistaActual] = useState<VistaType>('cliente'); 
-
   const [syncing, setSyncing] = useState(false);
   const [mostrarTabla, setMostrarTabla] = useState(true);
   const [activeTab, setActiveTab] = useState<TabType>('recorder'); 
@@ -31,7 +28,6 @@ function App() {
     setActiveTab('history');
   };
 
-  // Cargar AMBOS conjuntos de datos
   const cargarDatos = async () => {
     try {
         const [resMin, resCli] = await Promise.all([
@@ -59,14 +55,65 @@ function App() {
     setTimeout(() => setSyncing(false), 800); 
   };
 
-  // Determinar qué datos mostrar según el botón seleccionado
   const datosVisibles = vistaActual === 'cliente' ? dataCliente : dataMinisterio;
-  const columnas = datosVisibles.length > 0 ? Object.keys(datosVisibles[0]) : [];
+
+  // --- CONFIGURACIÓN DE COLUMNAS ACTUALIZADA ---
+  const columnConfig: Record<string, string> = {
+    fecha: "📅 Fecha",
+    titulo: "📌 Evento / Motivo",
+    lugar: "📍 Ubicación",
+    funcionario: "👤 Funcionario",
+    costo: "💰 Costo",  // <--- AHORA USAMOS 'COSTO' GENÉRICO
+    ambito: "🌍 Ámbito",
+    estado: "📊 Estado",
+    num_expediente: "📂 Exp.",
+    organizador: "🏢 Organiza"
+  };
+
+  // Renderizado Inteligente de Celdas
+  const renderCell = (key: string, value: any, item: AgendaItem) => {
+    if (!value && value !== 0) return <span className="text-slate-300">-</span>;
+    
+    // LÓGICA MULTIMONEDA
+    if (key === 'costo' && typeof value === 'number') {
+        const moneda = item.moneda || 'ARS';
+        let colorClass = 'text-emerald-600'; // Default ARS
+        
+        if (moneda === 'USD') colorClass = 'text-green-400';
+        if (moneda === 'EUR') colorClass = 'text-blue-400';
+
+        return (
+            <div className="flex flex-col">
+                <span className={`font-mono font-bold ${colorClass}`}>
+                    {new Intl.NumberFormat('es-AR', { style: 'currency', currency: moneda }).format(value)}
+                </span>
+                {/* Pequeña etiqueta de moneda si no es ARS */}
+                {moneda !== 'ARS' && <span className="text-[10px] text-slate-500">{moneda}</span>}
+            </div>
+        );
+    }
+
+    if (key === 'fecha') {
+        return new Date(value).toLocaleDateString('es-AR', { day: '2-digit', month: 'short', year: 'numeric' });
+    }
+
+    if (key === 'ambito') {
+        const color = value === 'Internacional' ? 'bg-purple-100 text-purple-700' : 'bg-blue-100 text-blue-700';
+        return <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${color}`}>{value}</span>;
+    }
+
+    return String(value).substring(0, 60);
+  };
+
+  // Columnas a mostrar (Usamos 'costo' en vez de 'costo_ars')
+  const columnasMostrar = vistaActual === 'cliente' 
+    ? ['fecha', 'titulo', 'funcionario', 'lugar', 'costo', 'estado']
+    : ['fecha', 'titulo', 'organizador', 'lugar', 'ambito'];
 
   return (
     <div className="max-w-[1600px] mx-auto p-4 md:p-8 min-h-screen text-slate-300">
       
-      {/* --- HEADER --- */}
+      {/* HEADER */}
       <header className="flex flex-col md:flex-row justify-between items-end mb-8 pb-6 border-b border-white/10 gap-4">
         <div className="w-full md:w-auto">
           <h1 className="text-3xl md:text-4xl font-bold bg-gradient-to-r from-blue-400 via-indigo-400 to-purple-400 bg-clip-text text-transparent flex items-center gap-3">
@@ -94,7 +141,7 @@ function App() {
         </div>
       </header>
 
-      {/* --- SWITCH DE VISTAS (CONTROLES DE TABLA) --- */}
+      {/* CONTROLES */}
       {mostrarTabla && (
         <div className="flex gap-4 mb-4">
             <button 
@@ -125,29 +172,32 @@ function App() {
         </div>
       )}
 
-      {/* --- TABLA DINÁMICA --- */}
+      {/* TABLA */}
       {mostrarTabla && (
         <div className="bg-white text-slate-900 rounded-2xl overflow-hidden mb-8 shadow-xl border border-slate-200 transition-all duration-300">
           <div className="overflow-x-auto max-h-[500px] custom-scrollbar"> 
             {datosVisibles.length === 0 ? (
               <div className="p-12 text-center text-slate-500">
-                <p>Cargando datos o tabla vacía...</p>
+                <p>Base de datos sincronizada. No hay registros para esta vista.</p>
               </div>
             ) : (
               <table className="w-full text-sm text-left relative">
                 <thead className="bg-slate-100 text-slate-900 uppercase text-xs tracking-wider font-bold border-b border-slate-300 sticky top-0 z-10 shadow-sm">
                   <tr>
-                    {columnas.map((col) => (
-                      <th key={col} className="px-6 py-4 whitespace-nowrap">{col}</th>
+                    {columnasMostrar.map((colKey) => (
+                      <th key={colKey} className="px-6 py-4 whitespace-nowrap">
+                        {columnConfig[colKey] || colKey}
+                      </th>
                     ))}
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-200">
                   {datosVisibles.map((row, i) => (
                     <tr key={i} className="hover:bg-slate-50 transition-colors group">
-                      {columnas.map((col) => (
-                        <td key={col} className="px-6 py-4 whitespace-nowrap text-slate-700 font-medium group-hover:text-blue-600 transition-colors">
-                          {row[col] ? row[col].toString().substring(0, 60) : '-'}
+                      {columnasMostrar.map((colKey) => (
+                        <td key={colKey} className="px-6 py-4 whitespace-nowrap text-slate-700 font-medium">
+                          {/* @ts-ignore */}
+                          {renderCell(colKey, row[colKey as keyof AgendaItem], row)}
                         </td>
                       ))}
                     </tr>
@@ -158,14 +208,14 @@ function App() {
           </div>
           <div className="bg-slate-50 px-6 py-3 border-t border-slate-200 flex justify-between items-center text-xs text-slate-500 font-medium">
              <p className="uppercase tracking-widest">
-                {vistaActual === 'cliente' ? '📁 Vista: Gestión Privada' : '🏛️ Vista: Ministerio Público'}
+                {vistaActual === 'cliente' ? '📁 Fuente: SQL Misiones' : '🏛️ Fuente: SQL Público'}
              </p>
-             <span>Total registros: {datosVisibles.length}</span>
+             <span>Sincronizado: {new Date().toLocaleTimeString()}</span>
           </div>
         </div>
       )}
       
-      {/* --- SECCIÓN 2: GRID DE HERRAMIENTAS IA --- */}
+      {/* SECCIÓN 2: HERRAMIENTAS IA */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 h-[750px]">
         <div className="rounded-2xl overflow-hidden shadow-2xl border border-white/10 bg-slate-900/60 backdrop-blur-xl flex flex-col">
             <div className="bg-white/5 p-4 border-b border-white/5 flex items-center justify-between">
@@ -221,7 +271,7 @@ function App() {
       </div>
       
       <footer className="mt-12 mb-6 text-center">
-        <p className="text-xs text-slate-600 font-mono">MINCYT AI SYSTEM v2.0.5 • SECURE CONNECTION ESTABLISHED</p>
+        <p className="text-xs text-slate-600 font-mono">MINCYT AI SYSTEM v3.2 • MULTIMONEDA ACTIVE</p>
       </footer>
     </div>
   );

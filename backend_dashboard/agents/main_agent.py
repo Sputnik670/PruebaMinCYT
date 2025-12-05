@@ -6,7 +6,6 @@ import locale
 import operator
 from typing import List, Any, TypedDict, Annotated
 
-# Configuración de locale para fechas (intento)
 try: locale.setlocale(locale.LC_TIME, 'es_ES.UTF-8')
 except: pass
 
@@ -21,26 +20,18 @@ from langchain_community.chat_message_histories import ChatMessageHistory
 from tools.general import get_search_tool
 from tools.email import crear_borrador_email
 from tools.database import consultar_actas_reuniones, consultar_biblioteca_documentos
-# (CAMBIO) Eliminamos las herramientas crudas de aquí. 
-# El agente solo debe ver al "Analista" para evitar confusiones.
 from tools.analysis import analista_de_datos_cliente
 from tools.actions import agendar_reunion_oficial, enviar_email_real
 
 logger = logging.getLogger(__name__)
 
-# Modelo: Usamos Flash con temperatura 0 para precisión en instrucciones
+# Usamos Flash con temperatura 0 para máxima precisión
 llm = ChatGoogleGenerativeAI(model="models/gemini-2.0-flash-001", temperature=0, max_retries=2)
 
 def get_memory_aware_history(history_list):
-    """
-    Recupera el historial de chat de forma segura.
-    Mantenemos ConversationSummaryBufferMemory porque priorizas la ROBUSTEZ.
-    Esto asegura que el bot tenga "memoria fotográfica" de lo reciente y "contexto general" de lo antiguo.
-    """
     chat_history = ChatMessageHistory()
     
-    # Procesamos todo menos el último mensaje
-    for msg in (history_list[:-1] if history_list else []):
+    for msg in (history_list or []):
         if isinstance(msg, dict):
             txt = msg.get('text', '')
             sender = msg.get('sender', '')
@@ -53,61 +44,53 @@ def get_memory_aware_history(history_list):
         else: 
             chat_history.add_ai_message(txt)
     
-    # Aumentamos el límite de tokens para garantizar más contexto preciso antes de resumir
     mem = ConversationSummaryBufferMemory(
         llm=llm, 
         chat_memory=chat_history, 
-        max_token_limit=3000, 
+        max_token_limit=4000, 
         return_messages=True, 
         memory_key="chat_history"
     )
     return mem.load_memory_variables({})["chat_history"]
 
-# --- 2. CÁLCULO DE FECHA LOCAL ---
 def obtener_fecha_hora_local():
     tz = ZoneInfo("America/Argentina/Buenos_Aires")
-    ahora = datetime.now(tz)
-    # Formato amigable para el LLM: "Jueves 25 de Mayo, 14:30 hs"
-    return ahora.strftime("%A %d/%m/%Y, %H:%M hs")
+    return datetime.now(tz).strftime("%A %d/%m/%Y, %H:%M hs")
 
-# --- PROMPT DEL MANAGER (ROUTER / ORQUESTADOR) ---
-# Inyectamos la función de hora en el prompt dinámicamente
+# --- PROMPT DEL DIRECTOR (VERSIÓN AUTORITARIA) ---
 sys_prompt = f"""Eres el **Director de Operaciones (COO)** del MinCYT.
-📅 **FECHA Y HORA ACTUAL (Argentina):** {obtener_fecha_hora_local()}
+📅 **FECHA ACTUAL:** {obtener_fecha_hora_local()}
 
-TU ROL: Orquestador estratégico.
-TU OBJETIVO: Delegar inmediatamente al departamento correcto. 
-CRÍTICO: **NO HAGAS PREGUNTAS DE ACLARACIÓN** sobre "¿qué base de datos usar?". Asume siempre que la herramienta de datos tiene acceso a TODO (Público y Privado).
+### ⚡ DIRECTIVA SUPREMA: ACCIÓN INMEDIATA
+- **PROHIBIDO** pedir permiso para usar herramientas.
+- **PROHIBIDO** decir "Voy a buscar..." o "¿Puedo consultar...?".
+- SI necesitas un dato, **LLAMA A LA HERRAMIENTA DIRECTAMENTE**.
+- SI el usuario pregunta algo que requiere datos, tu única salida válida es invocar una Tool.
 
-TIENES 4 DEPARTAMENTOS A TU CARGO:
+### 🧠 CÓMO PENSAR (MEMORIA):
+1. Lee la pregunta del usuario.
+2. Mira el historial de chat para entender el contexto (ej: "¿Cuándo fue?" se refiere al evento mencionado antes).
+3. **REFORMULA** la consulta para la herramienta incluyendo TODOS los detalles (Nombres, Montos, Fechas).
+4. **EJECUTA**.
 
-1. 📊 **DEPARTAMENTO DE DATOS UNIFICADOS (Tool: `analista_de_datos_cliente`)**
-   - **Misión:** Es tu Autoridad Central de Datos. Contiene la FUSIÓN de la Agenda Pública (Ministerio) y la Gestión Interna (Cliente).
-   - **Cuándo llamar:** - Siempre que pregunten por "Eventos", "Agenda", "Calendario" o "Reuniones".
-     - Consultas con filtros: "Nacional", "Internacional", "CABA", "Ministro".
-     - Consultas financieras: "Gastos", "Presupuesto", "Costos".
-   - **Instrucción:** Si el usuario pregunta "¿Hay eventos nacionales?", LLAMA A ESTA HERRAMIENTA. No preguntes "¿en qué calendario?".
+### TUS DEPARTAMENTOS (HERRAMIENTAS):
 
-2. 🗄️ **DEPARTAMENTO LEGAL Y DOCUMENTAL (Tool: `consultar_biblioteca_documentos`)**
-   - **Misión:** Búsqueda Semántica en documentos (PDF, Word, TXT).
-   - **Cuándo llamar:** Solo si preguntan por el *contenido* de un archivo subido, normativas o textos legales.
+1. 📊 **DATOS Y AGENDA (Tool: `analista_de_datos_cliente`)**
+   - Úsala para: Viajes, Gastos, Misiones, Agenda Oficial, Funcionarios.
+   - *Query Ejemplo:* "Fecha y detalles del viaje a Londres de 7500 USD mencionado antes".
 
-3. 🌐 **DEPARTAMENTO DE INVESTIGACIÓN (Tool: `tavily_search_results_json`)**
-   - **Misión:** Buscar información externa en internet.
-   - **Cuándo llamar:** Noticias recientes, datos que no dependen del ministerio.
+2. 🗄️ **LEGAL (Tool: `consultar_biblioteca_documentos`)**
+   - Úsala para: Leer PDFs o documentos subidos.
 
-4. 📅 **SECRETARÍA EJECUTIVA (Tools: `agendar_reunion_oficial`, `crear_borrador_email`)**
-   - **Misión:** Ejecutar acciones reales.
-   - **Cuándo llamar:** "Agendar reunión", "Enviar correo". Usa siempre la fecha actual como referencia.
+3. 🌐 **WEB (Tool: `tavily_search_results_json`)**
+   - Úsala para: Info de internet.
 
-REGLAS DE MANDO:
-- Ante la duda sobre datos, usa la **Herramienta 1**. Ella sabrá filtrar si es dato público o privado.
-- Solo responde al usuario cuando la herramienta te haya dado la información.
+4. 📅 **ACCIÓN (Tools: `agendar_reunion_oficial`, `crear_borrador_email`)**
+   - Úsala para: Agendar o enviar mails.
+
+¡NO CHARLES! ¡EJECUTA!
 """
 
-# (CAMBIO CRÍTICO) Lista de herramientas LIMPIA
-# Quitamos consultar_calendario_ministerio y consultar_calendario_cliente
-# para forzar el uso del analista_de_datos_cliente (que tiene la data unificada).
 tools = [
     analista_de_datos_cliente, 
     consultar_biblioteca_documentos, 
@@ -120,18 +103,15 @@ tools = [
 
 llm_with_tools = llm.bind_tools(tools)
 
-# --- GRAFO LANGGRAPH ---
 class State(TypedDict): messages: Annotated[List[BaseMessage], operator.add]
 
 def call_model(s): 
-    # Actualizamos el prompt de sistema en cada llamada para que la hora esté fresca
     msgs = s['messages']
-    # Si el primer mensaje es System, lo actualizamos. Si no, lo insertamos.
+    sys_msg = SystemMessage(content=sys_prompt)
     if isinstance(msgs[0], SystemMessage):
-        msgs[0] = SystemMessage(content=sys_prompt)
+        msgs[0] = sys_msg
     else:
-        msgs.insert(0, SystemMessage(content=sys_prompt))
-        
+        msgs.insert(0, sys_msg)
     return {"messages": [llm_with_tools.invoke(msgs)]}
 
 def route(s): 
@@ -147,10 +127,7 @@ app = wf.compile()
 
 def get_agent_response(msg, hist=[]):
     try:
-        # Recuperamos historial con memoria inteligente
         memory_messages = get_memory_aware_history(hist)
-        
-        # Invocamos el grafo
         res = app.invoke(
             {"messages": memory_messages + [HumanMessage(content=msg)]}, 
             config={"recursion_limit": 20}
