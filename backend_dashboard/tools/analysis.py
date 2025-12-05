@@ -132,9 +132,15 @@ def analista_de_datos_cliente(consulta: str):
 
         llm = ChatGoogleGenerativeAI(model="models/gemini-2.0-flash-001", temperature=0)
         
-        # Actualizamos el Prompt para que la IA sepa usar la nueva columna AMBITO
+        # Actualizamos el Prompt para que la IA sepa usar la nueva columna AMBITO y NO INVENTE DATOS
         prefix = f"""
         Eres un Experto Analista de Datos en Python.
+        
+        ### IMPORTANTE:
+        1. **NO CREES DATOS FICTICIOS (MOCK DATA)**.
+        2. El DataFrame `df` **YA ESTÁ CARGADO** en tu entorno con los datos reales. ÚSALO DIRECTAMENTE.
+        3. No definas `df = pd.DataFrame(...)`. Eso borra los datos reales.
+
         Trabajas con un DataFrame `df` que combina dos fuentes de datos.
         
         ### CÓMO DIFERENCIAR LOS DATOS (IMPORTANTE):
