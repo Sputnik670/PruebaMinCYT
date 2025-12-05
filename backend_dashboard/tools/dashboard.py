@@ -170,6 +170,7 @@ def procesar_fila_ministerio(fila):
     raw_ambito = get_val(["NACINTL", "AMBITO", "TIPO"]) 
 
     # --- CORRECCIÓN DE ÁMBITO (NORMALIZACIÓN) ---
+    # Esto soluciona el problema de conteo unificando "NAC"/"INTL" en etiquetas estándar
     if raw_ambito:
         s = str(raw_ambito).upper().strip()
         if "NAC" in s:
