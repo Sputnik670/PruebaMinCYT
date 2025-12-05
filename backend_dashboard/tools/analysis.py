@@ -64,13 +64,18 @@ def get_df_optimizado():
             "FUNCIONARIO": "Ministerio (Oficial)",
             "COSTO_TRASLADO": "0",
             # ETIQUETA 1: Usamos tu nombre personalizado
-            "ORIGEN_DATO": "CalendariosInternacionales"
+            "ORIGEN_DATO": "CalendariosInternacionales",
+            # (NUEVO) Agregamos columna de ámbito explícita
+            "AMBITO": row.get("AMBITO", "No especificado")
         })
 
     # 3. Etiquetado de la Agenda Cliente (Privada)
     for row in data_cliente:
         # ETIQUETA 2: Usamos tu nombre personalizado
         row["ORIGEN_DATO"] = "MisionesOficialesSICyT"
+        # (NUEVO) Default para gestión interna si no existe
+        if "AMBITO" not in row:
+            row["AMBITO"] = "Gestión Interna"
 
     # 4. Fusión
     todos_los_datos = data_cliente + ministerio_normalizado
@@ -95,7 +100,7 @@ def get_df_optimizado():
         df['monto_numerico'] = 0.0
         df['moneda_detectada'] = 'ARS'
 
-    # 7. Procesar Fechas (CORRECCIÓN IMPLEMENTADA AQUÍ)
+    # 7. Procesar Fechas
     if 'fecha_viaje' in df.columns:
         df['fecha_dt'] = pd.to_datetime(df['fecha_viaje'], dayfirst=True, errors='coerce')
         
@@ -127,27 +132,31 @@ def analista_de_datos_cliente(consulta: str):
 
         llm = ChatGoogleGenerativeAI(model="models/gemini-2.0-flash-001", temperature=0)
         
-        # Actualizamos el Prompt para que la IA entienda tus nombres
+        # Actualizamos el Prompt para que la IA sepa usar la nueva columna AMBITO
         prefix = f"""
         Eres un Experto Analista de Datos en Python.
         Trabajas con un DataFrame `df` que combina dos fuentes de datos.
         
         ### CÓMO DIFERENCIAR LOS DATOS (IMPORTANTE):
         - La columna `origen_dato` te dice de dónde viene la información:
-            1. **"Calendarios Internacionales"**: Es la agenda pública (eventos, congresos, oficiales).
+            1. **"CalendariosInternacionales"**: Es la agenda pública (eventos, congresos, oficiales).
             2. **"MisionesOficialesSICyT"**: Es la gestión interna (costos, expedientes, misiones).
+        
+        - La columna `ambito` contiene el alcance geográfico (ej: "Nacional", "Internacional").
 
         ### COLUMNAS CLAVE:
         - `fecha_dt`: Fecha del evento.
         - `motivo_evento`: Título o tema.
         - `destino`: Lugar.
         - `monto_numerico`: Costo (casi siempre 0 en Calendarios).
+        - `ambito`: Alcance del evento.
 
         ### TUS REGLAS:
         1. Si preguntan por "Oficial", "Internacional" o "Pública", filtra `df[df['origen_dato'] == 'CalendariosInternacionales']`.
         2. Si preguntan "Gastos", "Misiones" o "Gestión", filtra `df[df['origen_dato'] == 'MisionesOficialesSICyT']`.
-        3. Si preguntan "Comparar" o "Todo", usa todo el dataframe.
-        4. Genera código Python/Pandas preciso.
+        3. **SI PIDEN FILTRAR POR ÁMBITO (Nacional/Internacional), usa la columna `ambito`**.
+        4. Si preguntan "Comparar" o "Todo", usa todo el dataframe.
+        5. Genera código Python/Pandas preciso.
 
         Pregunta del usuario: {consulta}
         """
