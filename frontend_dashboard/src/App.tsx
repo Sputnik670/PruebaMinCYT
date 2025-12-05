@@ -1,10 +1,12 @@
 import { useState, useEffect } from 'react';
 import './App.css';
+import { supabase } from './supabaseClient';
+import { Session } from '@supabase/supabase-js'; // <--- FIX: Importamos el tipo Session
 import { ChatInterface } from './components/ChatInterface'; 
 import { MeetingRecorder } from './components/MeetingRecorder';
 import { MeetingHistory } from './components/MeetingHistory'; 
-import { LayoutDashboard, RefreshCw, Eye, EyeOff, Bot, FileAudio, Building2, Briefcase } from 'lucide-react';
-import { AgendaItem } from './types/types'; // Importamos el tipo actualizado
+import { LayoutDashboard, RefreshCw, Eye, EyeOff, Bot, FileAudio, Building2, Briefcase, LogOut, Lock } from 'lucide-react';
+import { AgendaItem } from './types/types'; 
 
 // Configuración de red
 const rawUrl = import.meta.env.VITE_BACKEND_URL || "http://127.0.0.1:8000";
@@ -14,14 +16,50 @@ type VistaType = 'cliente' | 'ministerio';
 type TabType = 'recorder' | 'history';
 
 function App() {
+  // --- FIX: Definimos el tipo explícito para el estado de la sesión ---
+  const [session, setSession] = useState<Session | null>(null);
+  const [loadingAuth, setLoadingAuth] = useState(true);
+
+  // --- ESTADO DEL DASHBOARD ---
   const [dataMinisterio, setDataMinisterio] = useState<AgendaItem[]>([]);
   const [dataCliente, setDataCliente] = useState<AgendaItem[]>([]);
-  
   const [vistaActual, setVistaActual] = useState<VistaType>('cliente'); 
   const [syncing, setSyncing] = useState(false);
   const [mostrarTabla, setMostrarTabla] = useState(true);
   const [activeTab, setActiveTab] = useState<TabType>('recorder'); 
   const [refreshTrigger, setRefreshTrigger] = useState(0);
+
+  // 1. EFECTO PARA VERIFICAR SESIÓN AL INICIAR
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setSession(session);
+      setLoadingAuth(false);
+    });
+
+    // --- FIX: Tipamos el evento explícitamente, aunque TS suele inferirlo ---
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      setSession(session);
+    });
+
+    return () => subscription.unsubscribe();
+  }, []);
+
+  // 2. FUNCIÓN DE LOGIN CON GOOGLE
+  const handleGoogleLogin = async () => {
+    await supabase.auth.signInWithOAuth({
+      provider: 'google',
+      options: {
+        redirectTo: window.location.origin, 
+      },
+    });
+  };
+
+  // 3. FUNCIÓN DE LOGOUT
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
+  };
 
   const handleUploadSuccess = () => {
     setRefreshTrigger(prev => prev + 1);
@@ -34,19 +72,18 @@ function App() {
             fetch(`${API_URL}/api/agenda/ministerio`),
             fetch(`${API_URL}/api/agenda/cliente`)
         ]);
-        
         const jsonMin = await resMin.json();
         const jsonCli = await resCli.json();
-
         if (Array.isArray(jsonMin)) setDataMinisterio(jsonMin);
         if (Array.isArray(jsonCli)) setDataCliente(jsonCli);
-
     } catch (error) {
         console.error("Error cargando agendas:", error);
     }
   };
 
-  useEffect(() => { cargarDatos(); }, []);
+  useEffect(() => { 
+    if (session) cargarDatos(); 
+  }, [session]); 
 
   const sincronizar = async () => {
     setSyncing(true);
@@ -55,9 +92,45 @@ function App() {
     setTimeout(() => setSyncing(false), 800); 
   };
 
+  // --- PANTALLA DE CARGA ---
+  if (loadingAuth) {
+    return <div className="min-h-screen bg-slate-950 flex items-center justify-center text-slate-400">Cargando sistema...</div>;
+  }
+
+  // --- PANTALLA DE LOGIN (Si no hay sesión) ---
+  if (!session) {
+    return (
+      <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center p-4">
+        <div className="bg-slate-900/50 p-8 rounded-2xl border border-white/10 shadow-2xl max-w-md w-full text-center backdrop-blur-xl">
+          <div className="mb-6 flex justify-center">
+            <div className="p-4 bg-blue-500/20 rounded-full text-blue-400 shadow-[0_0_15px_rgba(59,130,246,0.5)]">
+               <Lock size={40} />
+            </div>
+          </div>
+          <h1 className="text-3xl font-bold text-slate-100 mb-2">Acceso Restringido</h1>
+          <p className="text-slate-400 mb-8">Sistema de Gestión MinCYT. Por favor identifíquese.</p>
+          
+          <button 
+            onClick={handleGoogleLogin}
+            className="w-full py-3 px-4 bg-white hover:bg-slate-200 text-slate-900 font-bold rounded-xl transition-all flex items-center justify-center gap-3 shadow-lg"
+          >
+            <svg className="w-5 h-5" viewBox="0 0 24 24">
+              <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
+              <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
+              <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/>
+              <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/>
+            </svg>
+            Ingresar con Google
+          </button>
+        </div>
+        <p className="mt-8 text-xs text-slate-600 font-mono">MINCYT SECURE LOGIN v3.2</p>
+      </div>
+    );
+  }
+
+  // --- SI HAY SESIÓN, MOSTRAMOS EL DASHBOARD ORIGINAL ---
   const datosVisibles = vistaActual === 'cliente' ? dataCliente : dataMinisterio;
 
-  // --- CONFIGURACIÓN DE COLUMNAS ---
   const columnConfig: Record<string, string> = {
     fecha: "📅 Fecha",
     titulo: "📌 Evento / Motivo",
@@ -70,18 +143,13 @@ function App() {
     organizador: "🏢 Organiza"
   };
 
-  // Renderizado Inteligente de Celdas
   const renderCell = (key: string, value: any, item: AgendaItem) => {
     if (!value && value !== 0) return <span className="text-slate-300">-</span>;
-    
-    // LÓGICA MULTIMONEDA
     if (key === 'costo' && typeof value === 'number') {
         const moneda = item.moneda || 'ARS';
-        let colorClass = 'text-emerald-600'; // Default ARS
-        
+        let colorClass = 'text-emerald-600'; 
         if (moneda === 'USD') colorClass = 'text-green-400';
         if (moneda === 'EUR') colorClass = 'text-blue-400';
-
         return (
             <div className="flex flex-col">
                 <span className={`font-mono font-bold ${colorClass}`}>
@@ -91,15 +159,10 @@ function App() {
             </div>
         );
     }
-
-    // LÓGICA DE FECHAS (RANGOS)
     if (key === 'fecha') {
-        // TRUCO: Forzar mediodía para evitar problema de zona horaria que resta un día
         const safeDate = (dateStr: string) => new Date(dateStr + 'T12:00:00');
         const fInicio = safeDate(value);
         const txtInicio = fInicio.toLocaleDateString('es-AR', { day: '2-digit', month: 'short' });
-        
-        // Si existe fecha de fin y es distinta a la de inicio, mostramos el rango
         if (item.fecha_fin && item.fecha_fin !== value) {
             const fFin = safeDate(item.fecha_fin);
             const txtFin = fFin.toLocaleDateString('es-AR', { day: '2-digit', month: 'short' });
@@ -110,15 +173,12 @@ function App() {
                 </div>
             );
         }
-        // Si es un solo día
         return txtInicio;
     }
-
     if (key === 'ambito') {
         const color = value === 'Internacional' ? 'bg-purple-100 text-purple-700' : 'bg-blue-100 text-blue-700';
         return <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${color}`}>{value}</span>;
     }
-
     return String(value).substring(0, 60);
   };
 
@@ -129,14 +189,18 @@ function App() {
   return (
     <div className="max-w-[1600px] mx-auto p-4 md:p-8 min-h-screen text-slate-300">
       
-      {/* HEADER */}
+      {/* HEADER CON BOTÓN DE LOGOUT */}
       <header className="flex flex-col md:flex-row justify-between items-end mb-8 pb-6 border-b border-white/10 gap-4">
         <div className="w-full md:w-auto">
           <h1 className="text-3xl md:text-4xl font-bold bg-gradient-to-r from-blue-400 via-indigo-400 to-purple-400 bg-clip-text text-transparent flex items-center gap-3">
             <LayoutDashboard className="text-blue-400" size={32} /> 
             MinCYT Dashboard
           </h1>
-          <p className="text-slate-400 text-sm mt-2 ml-1">Plataforma de Gestión Inteligente & IA</p>
+          <p className="text-slate-400 text-sm mt-2 ml-1">
+            Plataforma de Gestión Inteligente & IA • 
+            {/* --- FIX: Agregamos validación por si session o user son null temporalmente --- */}
+            <span className="text-blue-400 ml-2">Hola, {session?.user?.email}</span>
+          </p>
         </div>
         
         <div className="flex gap-3">
@@ -152,7 +216,17 @@ function App() {
             className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg transition-all shadow-lg shadow-blue-900/20 text-sm font-medium disabled:opacity-50 border border-blue-500/50"
           >
             <RefreshCw size={16} className={syncing ? "animate-spin" : ""} />
-            {syncing ? 'Sincronizando...' : 'Actualizar'}
+            {syncing ? 'Sync' : 'Actualizar'}
+          </button>
+          
+          {/* --- FIX: Error 4 - Agregamos title y aria-label para accesibilidad --- */}
+          <button 
+            onClick={handleLogout} 
+            title="Cerrar sesión"
+            aria-label="Cerrar sesión"
+            className="flex items-center gap-2 px-4 py-2 bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/20 rounded-lg transition-all text-sm font-medium"
+          >
+            <LogOut size={16} />
           </button>
         </div>
       </header>
