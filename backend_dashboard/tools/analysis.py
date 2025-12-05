@@ -1,7 +1,7 @@
 import pandas as pd
 import logging
 import re
-import locale
+# import locale  <-- COMENTADO: Ya no dependemos de la configuración regional del servidor
 from langchain_experimental.agents import create_pandas_dataframe_agent
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain.tools import tool
@@ -10,10 +10,11 @@ from tools.dashboard import get_data_cliente_formatted, get_data_ministerio_form
 
 logger = logging.getLogger(__name__)
 
-try: 
-    locale.setlocale(locale.LC_TIME, 'es_ES.UTF-8')
-except: 
-    pass
+# Bloque locale comentado para evitar errores en contenedores/render
+# try: 
+#     locale.setlocale(locale.LC_TIME, 'es_ES.UTF-8')
+# except: 
+#     pass
 
 def limpiar_moneda(val):
     """Limpia y convierte strings de dinero a float + moneda."""
@@ -94,11 +95,21 @@ def get_df_optimizado():
         df['monto_numerico'] = 0.0
         df['moneda_detectada'] = 'ARS'
 
-    # 7. Procesar Fechas
+    # 7. Procesar Fechas (CORRECCIÓN IMPLEMENTADA AQUÍ)
     if 'fecha_viaje' in df.columns:
         df['fecha_dt'] = pd.to_datetime(df['fecha_viaje'], dayfirst=True, errors='coerce')
-        df['mes_nombre'] = df['fecha_dt'].dt.month_name(locale='es_ES.UTF-8' if locale.getlocale()[0] else None)
+        
+        # Diccionario manual para garantizar nombres en español sin errores de locale
+        meses_es = {
+            1: "Enero", 2: "Febrero", 3: "Marzo", 4: "Abril",
+            5: "Mayo", 6: "Junio", 7: "Julio", 8: "Agosto",
+            9: "Septiembre", 10: "Octubre", 11: "Noviembre", 12: "Diciembre"
+        }
+        
         df['mes_numero'] = df['fecha_dt'].dt.month
+        # Mapeo seguro: si no hay mes (NaT), pone "Desconocido"
+        df['mes_nombre'] = df['mes_numero'].map(meses_es).fillna("Desconocido")
+        
         df['anio'] = df['fecha_dt'].dt.year
         
     return df.fillna('')
@@ -133,7 +144,7 @@ def analista_de_datos_cliente(consulta: str):
         - `monto_numerico`: Costo (casi siempre 0 en Calendarios).
 
         ### TUS REGLAS:
-        1. Si preguntan por "Oficial", "Internacional" o "Pública", filtra `df[df['origen_dato'] == 'CalendarioInternacionales']`.
+        1. Si preguntan por "Oficial", "Internacional" o "Pública", filtra `df[df['origen_dato'] == 'CalendariosInternacionales']`.
         2. Si preguntan "Gastos", "Misiones" o "Gestión", filtra `df[df['origen_dato'] == 'MisionesOficialesSICyT']`.
         3. Si preguntan "Comparar" o "Todo", usa todo el dataframe.
         4. Genera código Python/Pandas preciso.
