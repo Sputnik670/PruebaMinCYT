@@ -169,6 +169,15 @@ def procesar_fila_ministerio(fila):
     raw_observaciones = get_val(["OBSERVACIONES", "NOTAS", "DETALLE"])
     raw_ambito = get_val(["NACINTL", "AMBITO", "TIPO"]) 
 
+    # --- CORRECCIÓN DE ÁMBITO (NORMALIZACIÓN) ---
+    if raw_ambito:
+        s = str(raw_ambito).upper().strip()
+        if "NAC" in s:
+            raw_ambito = "Nacional"
+        elif "INT" in s:
+            raw_ambito = "Internacional"
+    # --------------------------------------------
+
     llenos = sum(1 for x in [raw_fecha, raw_evento, raw_lugar] if len(str(x)) > 2)
     if llenos < 2:
         return None
