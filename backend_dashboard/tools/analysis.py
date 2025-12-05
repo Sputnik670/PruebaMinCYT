@@ -5,7 +5,7 @@ import re
 from langchain_experimental.agents import create_pandas_dataframe_agent
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain.tools import tool
-# Importamos ambas fuentes
+# Importamos ambas fuentes (ahora usan la lectura estricta)
 from tools.dashboard import get_data_cliente_formatted, get_data_ministerio_formatted
 
 logger = logging.getLogger(__name__)
@@ -49,49 +49,57 @@ def limpiar_moneda(val):
 def get_df_optimizado():
     """
     Obtiene datos de AMBAS agendas, las unifica y limpia.
+    ADAPTADO: Consume la salida estandarizada del nuevo dashboard.py
+    y la formatea a las columnas que el agente espera.
     """
-    # 1. Obtener datos crudos
+    # 1. Obtener datos crudos (Ahora vienen limpios desde dashboard.py)
     data_cliente = get_data_cliente_formatted() or []
     data_ministerio = get_data_ministerio_formatted() or []
 
-    # 2. Normalización de la Agenda Ministerio (Pública)
-    ministerio_normalizado = []
+    filas_procesadas = []
+
+    # 2. Procesar Agenda Ministerio (Pública)
+    # El nuevo dashboard devuelve: FECHA, EVENTO, LUGAR, AMBITO...
     for row in data_ministerio:
-        ministerio_normalizado.append({
+        filas_procesadas.append({
             "FECHA_VIAJE": row.get("FECHA", ""),
             "DESTINO": row.get("LUGAR", ""),
             "MOTIVO_EVENTO": row.get("EVENTO", ""),
-            "FUNCIONARIO": "Ministerio (Oficial)",
-            "COSTO_TRASLADO": "0",
-            # ETIQUETA 1: Usamos tu nombre personalizado
-            "ORIGEN_DATO": "CalendariosInternacionales",
-            # (NUEVO) Agregamos columna de ámbito explícita
+            "FUNCIONARIO": "Ministerio (Oficial)", # Valor por defecto para diferenciar
+            "COSTO_TRASLADO": "0", # Ministerio no tiene costos en tu Excel
+            # Mantenemos las etiquetas originales que tu prompt conoce
+            "ORIGEN_DATO": "CalendariosInternacionales", 
             "AMBITO": row.get("AMBITO", "No especificado")
         })
 
-    # 3. Etiquetado de la Agenda Cliente (Privada)
+    # 3. Procesar Agenda Cliente (Privada)
+    # El nuevo dashboard devuelve: FECHA, EVENTO, LUGAR, COSTO...
     for row in data_cliente:
-        # ETIQUETA 2: Usamos tu nombre personalizado
-        row["ORIGEN_DATO"] = "MisionesOficialesSICyT"
-        # (NUEVO) Default para gestión interna si no existe
-        if "AMBITO" not in row:
-            row["AMBITO"] = "Gestión Interna"
+        filas_procesadas.append({
+            "FECHA_VIAJE": row.get("FECHA", ""),
+            "DESTINO": row.get("LUGAR", ""),
+            "MOTIVO_EVENTO": row.get("EVENTO", ""),
+            "FUNCIONARIO": row.get("FUNCIONARIO", ""),
+            "COSTO_TRASLADO": row.get("COSTO", "0"),
+            # Mantenemos las etiquetas originales que tu prompt conoce
+            "ORIGEN_DATO": "MisionesOficialesSICyT",
+            "AMBITO": "Gestión Interna" # Default si no viene del excel
+        })
 
-    # 4. Fusión
-    todos_los_datos = data_cliente + ministerio_normalizado
+    # 4. Crear DataFrame Unificado
+    if not filas_procesadas: return pd.DataFrame()
     
-    if not todos_los_datos: return pd.DataFrame()
+    df = pd.DataFrame(filas_procesadas)
     
-    df = pd.DataFrame(todos_los_datos)
-    
-    # 5. Limpieza técnica de nombres de columnas
+    # 5. Limpieza técnica de nombres de columnas (snake_case)
+    # Esto convierte 'FECHA_VIAJE' -> 'fecha_viaje', 'COSTO_TRASLADO' -> 'costo_traslado'
     df.columns = [
         str(c).lower().strip()
         .replace(' ', '_').replace('/', '_').replace('.', '') 
         for c in df.columns
     ]
 
-    # 6. Procesar Dinero
+    # 6. Procesar Dinero (Usando la columna normalizada 'costo_traslado')
     if 'costo_traslado' in df.columns:
         cols = df['costo_traslado'].apply(lambda x: pd.Series(limpiar_moneda(x)))
         df['monto_numerico'] = cols[0]
@@ -100,11 +108,12 @@ def get_df_optimizado():
         df['monto_numerico'] = 0.0
         df['moneda_detectada'] = 'ARS'
 
-    # 7. Procesar Fechas
+    # 7. Procesar Fechas (Usando la columna normalizada 'fecha_viaje')
     if 'fecha_viaje' in df.columns:
+        # dayfirst=True es clave para fechas argentinas (DD/MM/YYYY)
         df['fecha_dt'] = pd.to_datetime(df['fecha_viaje'], dayfirst=True, errors='coerce')
         
-        # Diccionario manual para garantizar nombres en español sin errores de locale
+        # Diccionario manual para garantizar nombres en español
         meses_es = {
             1: "Enero", 2: "Febrero", 3: "Marzo", 4: "Abril",
             5: "Mayo", 6: "Junio", 7: "Julio", 8: "Agosto",
@@ -112,9 +121,7 @@ def get_df_optimizado():
         }
         
         df['mes_numero'] = df['fecha_dt'].dt.month
-        # Mapeo seguro: si no hay mes (NaT), pone "Desconocido"
         df['mes_nombre'] = df['mes_numero'].map(meses_es).fillna("Desconocido")
-        
         df['anio'] = df['fecha_dt'].dt.year
         
     return df.fillna('')
@@ -132,7 +139,7 @@ def analista_de_datos_cliente(consulta: str):
 
         llm = ChatGoogleGenerativeAI(model="models/gemini-2.0-flash-001", temperature=0)
         
-        # Actualizamos el Prompt para que la IA sepa usar la nueva columna AMBITO y NO INVENTE DATOS
+        # PROMPT ORIGINAL (INTACTO, solo ajustes de formato visual)
         prefix = f"""
         Eres un Experto Analista de Datos en Python.
         
@@ -151,10 +158,10 @@ def analista_de_datos_cliente(consulta: str):
         - La columna `ambito` contiene el alcance geográfico (ej: "Nacional", "Internacional").
 
         ### COLUMNAS CLAVE:
-        - `fecha_dt`: Fecha del evento.
+        - `fecha_dt`: Fecha del evento (tipo datetime).
         - `motivo_evento`: Título o tema.
         - `destino`: Lugar.
-        - `monto_numerico`: Costo (casi siempre 0 en Calendarios).
+        - `monto_numerico`: Costo (float, casi siempre 0 en Calendarios).
         - `ambito`: Alcance del evento.
 
         ### TUS REGLAS:
