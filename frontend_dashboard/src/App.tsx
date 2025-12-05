@@ -57,13 +57,13 @@ function App() {
 
   const datosVisibles = vistaActual === 'cliente' ? dataCliente : dataMinisterio;
 
-  // --- CONFIGURACIÓN DE COLUMNAS ACTUALIZADA ---
+  // --- CONFIGURACIÓN DE COLUMNAS ---
   const columnConfig: Record<string, string> = {
     fecha: "📅 Fecha",
     titulo: "📌 Evento / Motivo",
     lugar: "📍 Ubicación",
     funcionario: "👤 Funcionario",
-    costo: "💰 Costo",  // <--- AHORA USAMOS 'COSTO' GENÉRICO
+    costo: "💰 Costo",
     ambito: "🌍 Ámbito",
     estado: "📊 Estado",
     num_expediente: "📂 Exp.",
@@ -87,14 +87,31 @@ function App() {
                 <span className={`font-mono font-bold ${colorClass}`}>
                     {new Intl.NumberFormat('es-AR', { style: 'currency', currency: moneda }).format(value)}
                 </span>
-                {/* Pequeña etiqueta de moneda si no es ARS */}
                 {moneda !== 'ARS' && <span className="text-[10px] text-slate-500">{moneda}</span>}
             </div>
         );
     }
 
+    // LÓGICA DE FECHAS (RANGOS)
     if (key === 'fecha') {
-        return new Date(value).toLocaleDateString('es-AR', { day: '2-digit', month: 'short', year: 'numeric' });
+        // TRUCO: Forzar mediodía para evitar problema de zona horaria que resta un día
+        const safeDate = (dateStr: string) => new Date(dateStr + 'T12:00:00');
+        const fInicio = safeDate(value);
+        const txtInicio = fInicio.toLocaleDateString('es-AR', { day: '2-digit', month: 'short' });
+        
+        // Si existe fecha de fin y es distinta a la de inicio, mostramos el rango
+        if (item.fecha_fin && item.fecha_fin !== value) {
+            const fFin = safeDate(item.fecha_fin);
+            const txtFin = fFin.toLocaleDateString('es-AR', { day: '2-digit', month: 'short' });
+            return (
+                <div className="flex flex-col text-xs leading-tight">
+                    <span className="font-semibold text-slate-200">{txtInicio}</span>
+                    <span className="text-slate-500">hasta {txtFin}</span>
+                </div>
+            );
+        }
+        // Si es un solo día
+        return txtInicio;
     }
 
     if (key === 'ambito') {
@@ -105,7 +122,6 @@ function App() {
     return String(value).substring(0, 60);
   };
 
-  // Columnas a mostrar (Usamos 'costo' en vez de 'costo_ars')
   const columnasMostrar = vistaActual === 'cliente' 
     ? ['fecha', 'titulo', 'funcionario', 'lugar', 'costo', 'estado']
     : ['fecha', 'titulo', 'organizador', 'lugar', 'ambito'];

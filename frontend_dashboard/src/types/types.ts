@@ -12,22 +12,24 @@ export interface ChatState {
   isLoading: boolean;
 }
 
-// --- INTERFAZ ACTUALIZADA (MULTIMONEDA) ---
+// --- INTERFAZ ACTUALIZADA (MULTIMONEDA Y RANGOS DE FECHA) ---
 export interface AgendaItem {
   id?: number;
-  fecha: string;
+  fecha: string;      // Fecha de INICIO
+  fecha_fin?: string; // Fecha de FIN (Nuevo campo opcional)
   titulo: string;
   lugar: string;
   ambito: string;
-  funcionario?: string;
   
-  // NUEVOS CAMPOS (Reemplazan a costo_ars)
+  // Campos opcionales
+  funcionario?: string;
   costo?: number;
-  moneda?: string; // Puede ser "ARS", "USD", "EUR"
+  moneda?: string;    // "ARS", "USD", "EUR"
   
   num_expediente?: string;
   estado?: string;
   organizador?: string;
   participantes?: string;
+  
   origen_dato: 'MisionesOficiales' | 'CalendarioPublico';
 }

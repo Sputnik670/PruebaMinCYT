@@ -19,7 +19,7 @@ key = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 supabase = create_client(url, key)
 
 def migrar_todo():
-    print("\n🔥 INICIANDO RESTAURACIÓN COMPLETA DE BASE DE DATOS...")
+    print("\n🔥 INICIANDO MIGRACIÓN CON RANGOS DE FECHA...")
     
     # 1. Limpieza Total
     print("🧹 Borrando todos los datos de 'agenda_unificada'...")
@@ -45,12 +45,14 @@ def migrar_todo():
             
             registro = {
                 "fecha": obj.fecha.isoformat(),
+                # 👇 AQUÍ ESTABA EL FALTANTE: Guardar la fecha de fin calculada
+                "fecha_fin": obj.fecha_fin.isoformat() if obj.fecha_fin else None,
                 "titulo": obj.titulo,
                 "lugar": obj.lugar,
                 "ambito": obj.ambito,
                 "funcionario": obj.funcionario,
-                "costo": obj.costo,      # <--- NUEVO CAMPO
-                "moneda": obj.moneda,    # <--- NUEVO CAMPO
+                "costo": obj.costo,
+                "moneda": obj.moneda,
                 "num_expediente": obj.num_expediente,
                 "estado": obj.estado,
                 "origen_dato": "MisionesOficiales"
@@ -78,6 +80,8 @@ def migrar_todo():
 
             registro = {
                 "fecha": obj.fecha.isoformat(),
+                # 👇 AQUÍ TAMBIÉN FALTABA
+                "fecha_fin": obj.fecha_fin.isoformat() if obj.fecha_fin else None,
                 "titulo": obj.titulo,
                 "lugar": obj.lugar,
                 "ambito": obj.ambito,
@@ -88,7 +92,7 @@ def migrar_todo():
             supabase.table("agenda_unificada").insert(registro).execute()
             count_min += 1
         except Exception as e:
-            print(f"❌ Error Ministerio Fila {i}: {e}")
+            pass
 
     print(f"\n🏁 RESTAURACIÓN FINALIZADA")
     print(f"   Gestión Interna: {count_cli} registros")

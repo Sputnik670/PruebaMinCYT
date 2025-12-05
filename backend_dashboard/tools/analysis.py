@@ -1,5 +1,6 @@
 import pandas as pd
 import logging
+from datetime import datetime
 from langchain_experimental.agents import create_pandas_dataframe_agent
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain.tools import tool
@@ -9,7 +10,7 @@ logger = logging.getLogger(__name__)
 
 def get_df_optimizado():
     """
-    Obtiene datos de SQL y genera un DataFrame unificado y limpio.
+    Obtiene datos de SQL y genera un DataFrame unificado.
     """
     data_cliente = get_data_cliente_formatted() or []
     data_ministerio = get_data_ministerio_formatted() or []
@@ -21,12 +22,21 @@ def get_df_optimizado():
     
     df = pd.DataFrame(todos_los_datos)
     
-    # Ajustes de tipos
+    # Conversión estricta de tipos para que Pandas funcione bien
     if 'fecha' in df.columns:
         df['fecha'] = pd.to_datetime(df['fecha'])
+    if 'fecha_fin' in df.columns:
+        df['fecha_fin'] = pd.to_datetime(df['fecha_fin'])
+    if 'costo' in df.columns:
+        df['costo'] = pd.to_numeric(df['costo'], errors='coerce').fillna(0)
         
-    # Rellenar nulos
-    df = df.fillna('')
+    # Rellenar nulos con valores seguros para evitar crashes
+    df = df.fillna({
+        'titulo': 'Sin título',
+        'lugar': 'Desconocido',
+        'moneda': 'ARS',
+        'funcionario': 'No asignado'
+    })
     
     return df
 
@@ -34,44 +44,55 @@ def get_df_optimizado():
 def analista_de_datos_cliente(consulta: str):
     """
     [DEPARTAMENTO DE DATOS]
-    Úsalo para responder preguntas sobre la AGENDA, VIAJES, FUNCIONARIOS, COSTOS o FECHAS.
-    Tiene acceso a toda la base de datos unificada (SQL).
+    Motor de análisis inteligente sobre SQL. 
+    Capaz de calcular costos por moneda, duraciones de viajes y filtrar por agenda.
     """
     try:
         df = get_df_optimizado()
         if df.empty: 
-            return "Error: La base de datos está vacía. No puedo consultar nada."
+            return "Error: La base de datos está vacía."
 
-        # Modelo Flash con temperatura 0 para análisis estricto
+        # LLM Temperatura 0 para lógica matemática estricta
         llm = ChatGoogleGenerativeAI(model="models/gemini-2.0-flash-001", temperature=0)
         
-        # --- PROMPT MAESTRO DE ANÁLISIS DE DATOS ---
-        prefix = f"""
-        Eres el Analista de Datos Principal del MinCYT. 
-        Tu trabajo es programar en Python (Pandas) para extraer LA VERDAD exacta del DataFrame `df`.
-
-        ### 🧠 TU CEREBRO (DATAFRAME `df`):
-        Las columnas disponibles son:
-        - `fecha` (datetime): Cuándo ocurre.
-        - `titulo` (string): Nombre del evento o motivo.
-        - `lugar` (string): Ciudad, País o Destino.
-        - `funcionario` (string): Persona que viaja.
-        - `costo` (float): El número del dinero gastado.
-        - `moneda` (string): 'ARS', 'USD', 'EUR'.
-        - `origen_dato`: 'MisionesOficiales' (Gastos) o 'CalendarioPublico' (Agenda).
-
-        ### 🔎 ESTRATEGIA DE BÚSQUEDA (IMPORTANTE):
-        1. **BÚSQUEDA CRUZADA:** Si el usuario menciona un nombre (ej: "Londres", "Pérez", "Congreso"), NO busques solo en una columna.
-           - Código sugerido: `df[df['titulo'].str.contains('Term', case=False) | df['lugar'].str.contains('Term', case=False) | df['funcionario'].str.contains('Term', case=False)]`
+        # Contexto temporal dinámico
+        fecha_actual = datetime.now().strftime("%Y-%m-%d")
         
-        2. **PREGUNTAS DE "MÁS CARO":**
-           - Ordena por `costo` descendente: `df.sort_values(by='costo', ascending=False).head(1)`.
-           - ¡OJO! Menciona siempre la MONEDA. 100 USD > 1000 ARS.
+        # --- PROMPT DINÁMICO & CIENTÍFICO (SCHEMA-AWARE) ---
+        prefix = f"""
+        Eres un Analista de Datos Forense (Data Scientist Senior).
+        HOY ES: {fecha_actual}.
 
-        3. **FECHAS:** - Si piden "¿Cuándo fue?", devuelve la columna `fecha` formateada como string.
+        ### 🧬 TU CEREBRO (DATAFRAME `df`):
+        - `fecha` (datetime): Inicio del evento.
+        - `fecha_fin` (datetime): Fin del evento (puede ser NaT si es de 1 día).
+        - `titulo`, `lugar`, `funcionario` (strings).
+        - `costo` (float): Valor numérico exacto.
+        - `moneda` (string): Divisa ('USD', 'EUR', 'ARS').
+        - `origen_dato`: 'MisionesOficiales' (Gastos) o 'CalendarioPublico'.
 
-        4. **ANTI-ALUCINACIÓN:** - Si el filtro devuelve 0 filas, RESPONDE: "No encontré datos sobre eso en la tabla".
-           - NO inventes fechas ni costos. Muestra solo lo que ves.
+        ### ⚠️ PROTOCOLO DE SEGURIDAD (ANTI-ALUCINACIÓN):
+        1. **BÚSQUEDA EXACTA:** - Usa `str.contains(..., case=False, na=False)` para buscar texto.
+           - Si el usuario dice "Londres", busca en `lugar` Y en `titulo`.
+        
+        2. **VERIFICACIÓN DE VACÍO (CRÍTICO):**
+           - Antes de responder, revisa si tu filtro devolvió 0 filas.
+           - SI ES 0: Responde LITERALMENTE: "No encontré registros que coincidan con [término] en la base de datos".
+           - PROHIBIDO INVENTAR DATOS. Si no está, no está.
+
+        ### 📐 REGLAS DE OPERACIÓN:
+        
+        1. **MULTIMONEDA:** - NUNCA sumes la columna `costo` directamente sin agrupar.
+           - SIEMPRE agrupa por moneda: `df.groupby('moneda')['costo'].sum()`.
+           - Reporta totales separados (ej: "100 USD y 5000 ARS").
+
+        2. **DURACIÓN Y FECHAS:**
+           - La duración es `(df['fecha_fin'] - df['fecha']).dt.days + 1`.
+           - Si preguntan "¿Cuándo termina?", usa `fecha_fin`.
+           - Si preguntan por "Próximos viajes", filtra `df['fecha'] >= '{fecha_actual}'`.
+        
+        3. **RESPUESTA:**
+           - Sé conciso y directo con los números.
 
         Pregunta del usuario: {consulta}
         """
@@ -83,8 +104,8 @@ def analista_de_datos_cliente(consulta: str):
             allow_dangerous_code=True,
             agent_executor_kwargs={"handle_parsing_errors": True},
             prefix=prefix,
-            include_df_in_prompt=False,
-            number_of_head_rows=5
+            include_df_in_prompt=False, # No pasamos las filas, solo la estructura
+            number_of_head_rows=3
         )
         
         resultado = agent.invoke({"input": consulta})
@@ -92,4 +113,4 @@ def analista_de_datos_cliente(consulta: str):
 
     except Exception as e:
         logger.error(f"Error en analista: {e}", exc_info=True)
-        return "Hubo un error técnico al leer los datos. Intenta reformular."
+        return "Error técnico procesando datos. Intenta ser más específico."
