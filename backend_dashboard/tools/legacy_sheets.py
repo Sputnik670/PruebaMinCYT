@@ -16,6 +16,61 @@ logger = logging.getLogger(__name__)
 SHEET_MINISTERIO_ID = "1Sm2icTOvSbmGD7mdUtl2DfflUZqoHpBW" 
 SHEET_CLIENTE_ID = "1HOiSJ-Hugkddv-kwGax6vhSV9tzthkiz" 
 
+# --- NUEVA FUNCIÓN DE LIMPIEZA INTELIGENTE (MONEDA + VALOR) ---
+def limpiar_monto_con_moneda(texto):
+    """
+    Detecta la moneda (USD/EUR/ARS) y corrige el formato numérico.
+    Devuelve un string: "USD 2636.60" o "EUR 1500.00"
+    """
+    if not texto: return "USD 0.00"
+    
+    texto_str = str(texto).strip()
+    texto_upper = texto_str.upper()
+    
+    # 1. Detectar Moneda
+    moneda = "USD" # Por defecto
+    if "EUR" in texto_upper or "€" in texto_upper:
+        moneda = "EUR"
+    elif "ARS" in texto_upper or "PESO" in texto_upper:
+        moneda = "ARS"
+    elif "LIBRA" in texto_upper or "GBP" in texto_upper:
+        moneda = "GBP"
+    
+    # 2. Limpiar basura para dejar solo números, puntos y comas
+    # Quitamos letras y símbolos de moneda
+    solo_numeros = re.sub(r'(?i)[a-z$u€£\s]+', '', texto_str).strip()
+    
+    if not solo_numeros: return f"{moneda} 0.00"
+
+    # 3. Lógica de corrección numérica (USA vs ARG)
+    try:
+        # Si tiene coma Y punto (ej: 2,363.60 o 2.363,60)
+        if ',' in solo_numeros and '.' in solo_numeros:
+            if solo_numeros.find(',') < solo_numeros.find('.'):
+                # Caso USA (2,363.60): Borrar coma
+                solo_numeros = solo_numeros.replace(',', '') 
+            else:
+                # Caso ARG (2.363,60): Borrar punto, cambiar coma por punto
+                solo_numeros = solo_numeros.replace('.', '').replace(',', '.')
+                
+        elif ',' in solo_numeros:
+            # Caso solo comas (ej: "23,50" o "2,363")
+            partes = solo_numeros.split(',')
+            # Si la parte decimal tiene exactamente 2 dígitos, asumimos que es decimal
+            if len(partes[-1]) == 2: 
+                solo_numeros = solo_numeros.replace(',', '.')
+            else: 
+                # Si tiene 3 (ej: 2,363), asumimos que es mil -> borrar coma
+                solo_numeros = solo_numeros.replace(',', '')
+        
+        valor_float = float(solo_numeros)
+    except ValueError:
+        valor_float = 0.0
+
+    # 4. Devolver formato estandarizado
+    return f"{moneda} {valor_float:.2f}"
+# ---------------------------------
+
 def get_creds():
     private_key = os.getenv("GOOGLE_PRIVATE_KEY")
     client_email = os.getenv("GOOGLE_CLIENT_EMAIL")
@@ -39,6 +94,7 @@ def limpiar_nombre_columna(col_name):
     if not col_name: return ""
     s = str(col_name).upper()
     s = ''.join(c for c in unicodedata.normalize('NFD', s) if unicodedata.category(c) != 'Mn')
+    # Permitimos letras y números, eliminamos espacios y símbolos raros
     return re.sub(r'[^A-Z0-9]', '', s)
 
 def formatear_fecha_sin_hora(valor):
@@ -61,10 +117,12 @@ def leer_excel_drive(file_id):
         file_stream.seek(0)
         xls = pd.ExcelFile(file_stream)
         datos = []
-        # Palabras clave ampliadas para detectar ambos tipos de headers
+        
+        # Palabras clave ampliadas para detectar headers (INCLUYENDO EE E INSTITUCION)
         keywords_header = [
             'FECHA', 'DIA', 'INICIO', 'EVENTO', 'ACTIVIDAD', 'TITULO', 
-            'LUGAR', 'DESTINO', 'COSTO', 'PRECIO', 'ORGANIZADOR', 'PARTICIPANTE'
+            'LUGAR', 'DESTINO', 'COSTO', 'PRECIO', 'ORGANIZADOR', 'PARTICIPANTE',
+            'EE', 'EXPEDIENTE', 'INSTITUCION', 'ORGANISMO'
         ]
 
         for sheet_name in xls.sheet_names:
@@ -80,6 +138,7 @@ def leer_excel_drive(file_id):
             if header_idx == -1: continue
 
             df = pd.read_excel(xls, sheet_name=sheet_name, header=header_idx, dtype=str).fillna("")
+            # Normalizamos nombres de columnas para facilitar la búsqueda
             df.columns = [limpiar_nombre_columna(col) for col in df.columns]
             datos.extend(df.to_dict(orient='records'))
             
@@ -93,6 +152,7 @@ def leer_excel_drive(file_id):
 def procesar_fila_cliente(fila):
     def get_val(keys_list):
         for k in keys_list:
+            # Buscamos coincidencia exacta o parcial en las llaves normalizadas
             if k in fila: return fila[k]
             for col_real in fila.keys():
                 if k in col_real: return fila[col_real]
@@ -107,9 +167,12 @@ def procesar_fila_cliente(fila):
         "DESTINO": get_val(["LUGAR", "DESTINO", "CIUDAD"]),
         "FUNCIONARIO": get_val(["NOMBRE", "FUNCIONARIO", "PARTICIPANTE"]),
         "MOTIVO_EVENTO": get_val(["MOTIVO", "EVENTO", "TITULO", "TEMA"]), 
-        "COSTO_TRASLADO": get_val(["COSTO", "PRECIO", "VALOR"]),
-        "NUMERO_EXPEDIENTE": get_val(["EE", "EXPEDIENTE", "EXP"]) or "No especificado",
-        "ESTADO_TRAMITE": get_val(["ESTADO"]),
+        # APLICAMOS LA NUEVA LÓGICA DE MONEDA AQUÍ:
+        "COSTO_TRASLADO": limpiar_monto_con_moneda(get_val(["COSTO", "PRECIO", "VALOR", "IMPORTE"])),
+        # AGREGAMOS INSTITUCION Y EE:
+        "INSTITUCION": get_val(["INSTITUCION", "ORGANISMO", "EMPRESA", "INVITA"]),
+        "NUMERO_EXPEDIENTE": get_val(["EE", "EXPEDIENTE", "EXP", "NROEXP"]) or "No especificado",
+        "ESTADO_TRAMITE": get_val(["ESTADO", "SITUACION"]),
         "AMBITO": "Gestión Interna"
     }
 
@@ -134,7 +197,7 @@ def procesar_fila_ministerio(fila):
         "FECHA": raw_fecha,
         "EVENTO": raw_evento,
         "LUGAR": get_val(["LUGAR", "UBICACION", "DESTINO", "PAIS", "CIUDAD"]),
-        "ORGANIZADOR": get_val(["ORGANIZADOR", "INVITA", "ORGANIZA"]),
+        "ORGANIZADOR": get_val(["ORGANIZADOR", "INVITA", "ORGANIZA", "INSTITUCION"]),
         "PARTICIPANTE": get_val(["PARTICIPANTE", "FUNCIONARIO", "QUIEN"]),
         "AMBITO": raw_ambito
     }
