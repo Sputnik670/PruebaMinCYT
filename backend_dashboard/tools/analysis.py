@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 
 def get_df_optimizado():
     """
-    Obtiene datos de SQL y genera un DataFrame unificado.
+    Obtiene datos de SQL y genera un DataFrame unificado y optimizado para IA.
     """
     data_cliente = get_data_cliente_formatted() or []
     data_ministerio = get_data_ministerio_formatted() or []
@@ -22,21 +22,28 @@ def get_df_optimizado():
     
     df = pd.DataFrame(todos_los_datos)
     
-    # Conversión estricta de tipos para que Pandas funcione bien
+    # --- 1. LIMPIEZA DE DATOS (Robusta) ---
     if 'fecha' in df.columns:
-        df['fecha'] = pd.to_datetime(df['fecha'])
+        df['fecha'] = pd.to_datetime(df['fecha'], errors='coerce')
     if 'fecha_fin' in df.columns:
-        df['fecha_fin'] = pd.to_datetime(df['fecha_fin'])
+        df['fecha_fin'] = pd.to_datetime(df['fecha_fin'], errors='coerce')
     if 'costo' in df.columns:
         df['costo'] = pd.to_numeric(df['costo'], errors='coerce').fillna(0)
         
-    # Rellenar nulos con valores seguros para evitar crashes
+    # Rellenar nulos para evitar errores técnicos
     df = df.fillna({
         'titulo': 'Sin título',
         'lugar': 'Desconocido',
         'moneda': 'ARS',
-        'funcionario': 'No asignado'
+        'funcionario': 'No asignado',
+        'origen_dato': 'Desconocido'
     })
+    
+    # --- 2. COLUMNAS NORMALIZADAS (Para búsqueda fácil) ---
+    # Creamos copias en minúsculas. Ayuda a encontrar "Washington" si el usuario escribe "washington"
+    df['lugar_norm'] = df['lugar'].astype(str).str.lower()
+    df['titulo_norm'] = df['titulo'].astype(str).str.lower()
+    df['funcionario_norm'] = df['funcionario'].astype(str).str.lower()
     
     return df
 
@@ -44,55 +51,57 @@ def get_df_optimizado():
 def analista_de_datos_cliente(consulta: str):
     """
     [DEPARTAMENTO DE DATOS]
-    Motor de análisis inteligente sobre SQL. 
-    Capaz de calcular costos por moneda, duraciones de viajes y filtrar por agenda.
+    Motor de análisis forense sobre SQL. 
+    Usa esta herramienta para CUALQUIER pregunta sobre costos, fechas, viajes, agenda o funcionarios.
     """
     try:
         df = get_df_optimizado()
-        if df.empty: 
-            return "Error: La base de datos está vacía."
-
-        # LLM Temperatura 0 para lógica matemática estricta
-        llm = ChatGoogleGenerativeAI(model="models/gemini-2.0-flash-001", temperature=0)
         
-        # Contexto temporal dinámico
+        # --- 🔍 LOG DE DIAGNÓSTICO EN TERMINAL ---
+        # Esto te permitirá saber SIEMPRE si el error es de datos o del LLM
+        print(f"\n📊 [DEBUG ANALISTA] DataFrame cargado en memoria: {len(df)} filas.")
+        if not df.empty:
+            print(f"   Columnas disponibles: {list(df.columns)}")
+        else:
+            print("   ⚠️ ATENCIÓN: El DataFrame está vacío (Posible error de conexión SQL).")
+        # ------------------------------------------
+
+        if df.empty: 
+            return "Error: La base de datos está vacía. No hay registros para analizar."
+
+        # --- 3. GROUNDING (Inyección de Contexto Real) ---
+        lista_lugares = df['lugar'].unique().tolist() if 'lugar' in df.columns else []
+        lista_monedas = df['moneda'].unique().tolist() if 'moneda' in df.columns else []
+        
+        # Le damos una "memoria" de qué valores existen realmente
+        preview_lugares = str(lista_lugares[:50]) 
+
+        llm = ChatGoogleGenerativeAI(model="models/gemini-2.0-flash-001", temperature=0)
         fecha_actual = datetime.now().strftime("%Y-%m-%d")
         
-        # --- PROMPT DINÁMICO & CIENTÍFICO (SCHEMA-AWARE) ---
+        # --- 4. PROMPT DE SEGURIDAD (ANTI-ALUCINACIÓN DE CÓDIGO) ---
         prefix = f"""
-        Eres un Analista de Datos Forense (Data Scientist Senior).
+        Eres un Analista de Datos experto en Pandas (Python).
         HOY ES: {fecha_actual}.
 
-        ### 🧬 TU CEREBRO (DATAFRAME `df`):
-        - `fecha` (datetime): Inicio del evento.
-        - `fecha_fin` (datetime): Fin del evento (puede ser NaT si es de 1 día).
-        - `titulo`, `lugar`, `funcionario` (strings).
-        - `costo` (float): Valor numérico exacto.
-        - `moneda` (string): Divisa ('USD', 'EUR', 'ARS').
-        - `origen_dato`: 'MisionesOficiales' (Gastos) o 'CalendarioPublico'.
+        ### ⚠️ INSTRUCCIONES DE EJECUCIÓN (CRÍTICO):
+        1. **LA VARIABLE `df` YA EXISTE EN MEMORIA.** - **PROHIBIDO** hacer `df = pd.read_csv(...)`. 
+           - **PROHIBIDO** crear datos de ejemplo (`data = ...`).
+           - Debes trabajar DIRECTAMENTE sobre la variable `df` que se te ha pasado.
 
-        ### ⚠️ PROTOCOLO DE SEGURIDAD (ANTI-ALUCINACIÓN):
-        1. **BÚSQUEDA EXACTA:** - Usa `str.contains(..., case=False, na=False)` para buscar texto.
-           - Si el usuario dice "Londres", busca en `lugar` Y en `titulo`.
-        
-        2. **VERIFICACIÓN DE VACÍO (CRÍTICO):**
-           - Antes de responder, revisa si tu filtro devolvió 0 filas.
-           - SI ES 0: Responde LITERALMENTE: "No encontré registros que coincidan con [término] en la base de datos".
-           - PROHIBIDO INVENTAR DATOS. Si no está, no está.
+        2. **MEMORIA DE DATOS REALES (Úsala para filtrar):**
+           - Lugares existentes en BD: {preview_lugares}...
+           - Monedas existentes: {lista_monedas}
+           - Si el usuario busca "Washington", verifica si en la lista aparece como "Washington D.C." o similar.
 
-        ### 📐 REGLAS DE OPERACIÓN:
-        
-        1. **MULTIMONEDA:** - NUNCA sumes la columna `costo` directamente sin agrupar.
-           - SIEMPRE agrupa por moneda: `df.groupby('moneda')['costo'].sum()`.
-           - Reporta totales separados (ej: "100 USD y 5000 ARS").
+        3. **SINTAXIS DE BÚSQUEDA SEGURA:**
+           - Usa SIEMPRE `.str.contains('texto', case=False, na=False)` sobre las columnas `_norm`.
+           - Ejemplo: `df[df['lugar_norm'].str.contains('washington', case=False, na=False)]`
+           - NUNCA uses igualdad exacta (`==`) para texto.
 
-        2. **DURACIÓN Y FECHAS:**
-           - La duración es `(df['fecha_fin'] - df['fecha']).dt.days + 1`.
-           - Si preguntan "¿Cuándo termina?", usa `fecha_fin`.
-           - Si preguntan por "Próximos viajes", filtra `df['fecha'] >= '{fecha_actual}'`.
-        
-        3. **RESPUESTA:**
-           - Sé conciso y directo con los números.
+        4. **VERIFICACIÓN DE VACÍO:**
+           - Si el resultado de tu filtro es vacío, responde: "No se encontraron registros en la base de datos."
+           - No inventes datos.
 
         Pregunta del usuario: {consulta}
         """
@@ -104,13 +113,18 @@ def analista_de_datos_cliente(consulta: str):
             allow_dangerous_code=True,
             agent_executor_kwargs={"handle_parsing_errors": True},
             prefix=prefix,
-            include_df_in_prompt=False, # No pasamos las filas, solo la estructura
-            number_of_head_rows=3
+            include_df_in_prompt=False, 
+            number_of_head_rows=5
         )
         
         resultado = agent.invoke({"input": consulta})
-        return resultado["output"]
+        
+        respuesta = str(resultado["output"])
+        if "Agent stopped" in respuesta:
+            return "El análisis se detuvo. Por favor intenta ser más específico con tu pregunta."
+            
+        return respuesta
 
     except Exception as e:
-        logger.error(f"Error en analista: {e}", exc_info=True)
-        return "Error técnico procesando datos. Intenta ser más específico."
+        logger.error(f"Error crítico en analista: {e}", exc_info=True)
+        return "Tuve un error técnico leyendo los datos. Intenta nuevamente."

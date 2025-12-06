@@ -1,5 +1,3 @@
-// src/services/geminiService.ts
-
 import { Message } from '../types/types'; 
 
 // Configuración robusta de la URL
@@ -44,7 +42,7 @@ export const sendMessageToGemini = async (
 
     if (!response.body) throw new Error("La respuesta no tiene cuerpo para leer (stream).");
 
-    // --- LÓGICA DE STREAMING MEJORADA (CON BUFFER Y PARSEO JSON) ---
+    // --- LÓGICA DE STREAMING ROBUSTA ---
     const reader = response.body.getReader();
     const decoder = new TextDecoder("utf-8");
     let done = false;
@@ -70,20 +68,32 @@ export const sendMessageToGemini = async (
             if (part.startsWith("data: ")) {
                 const rawData = part.slice(6); // Quitamos "data: " de forma segura
                 
-                // --- 🛡️ AQUÍ ESTÁ EL CAMBIO CLAVE PARA CORREGIR EL CORTE DE TEXTO ---
+                // 🛡️ MEJORA DE ESTABILIDAD:
+                
+                // A. Prioridad: ID de Sesión (formato especial)
+                if (rawData.startsWith("SESSION_ID:")) {
+                    onStreamUpdate(rawData);
+                    continue;
+                }
+
                 try {
-                    // Intentamos leer como JSON primero (formato seguro)
-                    if (rawData.trim().startsWith("{")) {
+                    // B. Intentamos parsear JSON solo si parece un objeto completo
+                    // Esto evita errores de "Unexpected end of JSON" si el chunk se cortó
+                    if (rawData.trim().startsWith("{") && rawData.trim().endsWith("}")) {
                         const parsed = JSON.parse(rawData);
                         if (parsed.text) {
                             onStreamUpdate(parsed.text);
+                        } else {
+                            // Si es un JSON desconocido, lo mandamos stringify por seguridad
+                            onStreamUpdate(JSON.stringify(parsed));
                         }
                     } else {
-                        // Soporte Legacy / SESSION_ID (Texto plano)
+                        // C. Si no es JSON completo o es texto plano, lo mandamos tal cual
+                        // para asegurar que el usuario vea el mensaje aunque llegue fragmentado
                         onStreamUpdate(rawData);
                     }
                 } catch (e) {
-                    // Si falla el parseo JSON, mandamos el texto crudo (ej: errores o IDs simples)
+                    // Fallback final: enviar texto crudo
                     onStreamUpdate(rawData);
                 }
             }

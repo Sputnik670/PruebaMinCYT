@@ -128,10 +128,41 @@ app = wf.compile()
 def get_agent_response(msg, hist=[]):
     try:
         memory_messages = get_memory_aware_history(hist)
+        
+        # Invocamos al grafo
         res = app.invoke(
             {"messages": memory_messages + [HumanMessage(content=msg)]}, 
             config={"recursion_limit": 20}
         )
+        
+        # --- 🕵️ ZONA DE DIAGNÓSTICO ---
+        print("\n" + "="*40)
+        print(f"🧐 DIAGNÓSTICO PARA: '{msg}'")
+        
+        # Revisamos los últimos mensajes para ver si hubo uso de herramientas
+        messages = res["messages"]
+        tool_used = False
+        
+        for m in messages:
+            # Si el modelo pidió usar una herramienta
+            if m.type == "ai" and m.tool_calls:
+                print(f"🤖 INTENTO DE TOOL: {m.tool_calls[0]['name']}")
+                print(f"   Parámetros: {m.tool_calls[0]['args']}")
+                tool_used = True
+            
+            # Si la herramienta respondió (Esto es lo IMPORTANTE)
+            if m.type == "tool":
+                content_preview = str(m.content)[:500] # Solo los primeros 500 chars
+                print(f"🔧 RESPUESTA DE TOOL: {content_preview}...")
+                if "Error" in str(m.content) or "[]" == str(m.content):
+                    print("⚠️  ¡LA HERRAMIENTA DEVOLVIÓ VACÍO O ERROR!")
+        
+        if not tool_used:
+            print("⚠️  EL AGENTE NO LLAMÓ A NINGUNA HERRAMIENTA (Posible Alucinación Pura)")
+            
+        print("="*40 + "\n")
+        # -------------------------------
+
         return res["messages"][-1].content
     except Exception as e:
         logger.error(f"Error en agente: {e}")
