@@ -30,15 +30,22 @@ def get_df_optimizado():
     if 'costo' in df.columns:
         df['costo'] = pd.to_numeric(df['costo'], errors='coerce').fillna(0)
         
-    # Rellenar nulos para evitar errores técnicos
+    # Rellenar nulos (SIN FORZAR MONEDA A ARS)
+    # Eliminamos 'moneda': 'ARS' de aquí para no sobrescribir datos valiosos
     df = df.fillna({
         'titulo': 'Sin título',
         'lugar': 'Desconocido',
-        'moneda': 'ARS',
         'funcionario': 'No asignado',
         'origen_dato': 'Desconocido'
     })
     
+    # Manejo inteligente de moneda: Si no existe o es nula, poner "Sin especificar"
+    if 'moneda' not in df.columns:
+        df['moneda'] = 'Sin especificar'
+    else:
+        # Convertimos a string y rellenamos nulos para asegurar que el GroupBy funcione
+        df['moneda'] = df['moneda'].fillna('Sin especificar').astype(str)
+
     # --- 2. COLUMNAS NORMALIZADAS (Para búsqueda fácil) ---
     # Creamos copias en minúsculas. Ayuda a encontrar "Washington" si el usuario escribe "washington"
     df['lugar_norm'] = df['lugar'].astype(str).str.lower()
@@ -58,12 +65,13 @@ def analista_de_datos_cliente(consulta: str):
         df = get_df_optimizado()
         
         # --- 🔍 LOG DE DIAGNÓSTICO EN TERMINAL ---
-        # Esto te permitirá saber SIEMPRE si el error es de datos o del LLM
-        print(f"\n📊 [DEBUG ANALISTA] DataFrame cargado en memoria: {len(df)} filas.")
+        print(f"\n📊 [DEBUG ANALISTA] DataFrame cargado: {len(df)} filas.")
         if not df.empty:
-            print(f"   Columnas disponibles: {list(df.columns)}")
+            # Mostramos las monedas detectadas para confirmar que llegan bien (ej: ['USD', 'EUR', 'ARS'])
+            monedas_unicas = df['moneda'].unique().tolist() if 'moneda' in df.columns else []
+            print(f"   💰 [DEBUG] Monedas detectadas en BD: {monedas_unicas}")
         else:
-            print("   ⚠️ ATENCIÓN: El DataFrame está vacío (Posible error de conexión SQL).")
+            print("   ⚠️ ATENCIÓN: El DataFrame está vacío.")
         # ------------------------------------------
 
         if df.empty: 
@@ -79,7 +87,7 @@ def analista_de_datos_cliente(consulta: str):
         llm = ChatGoogleGenerativeAI(model="models/gemini-2.0-flash-001", temperature=0)
         fecha_actual = datetime.now().strftime("%Y-%m-%d")
         
-        # --- 4. PROMPT DE SEGURIDAD (ANTI-ALUCINACIÓN DE CÓDIGO) ---
+        # --- 4. PROMPT DE SEGURIDAD MULTIMONEDA ---
         prefix = f"""
         Eres un Analista de Datos experto en Pandas (Python).
         HOY ES: {fecha_actual}.
@@ -90,18 +98,20 @@ def analista_de_datos_cliente(consulta: str):
            - Debes trabajar DIRECTAMENTE sobre la variable `df` que se te ha pasado.
 
         2. **MEMORIA DE DATOS REALES (Úsala para filtrar):**
-           - Lugares existentes en BD: {preview_lugares}...
-           - Monedas existentes: {lista_monedas}
-           - Si el usuario busca "Washington", verifica si en la lista aparece como "Washington D.C." o similar.
+           - Lugares existentes: {preview_lugares}...
+           - **MONEDAS DISPONIBLES:** {lista_monedas} (¡Importante para cálculos!)
 
         3. **SINTAXIS DE BÚSQUEDA SEGURA:**
            - Usa SIEMPRE `.str.contains('texto', case=False, na=False)` sobre las columnas `_norm`.
            - Ejemplo: `df[df['lugar_norm'].str.contains('washington', case=False, na=False)]`
-           - NUNCA uses igualdad exacta (`==`) para texto.
 
-        4. **VERIFICACIÓN DE VACÍO:**
+        4. **CÁLCULO DE COSTOS (IMPORTANTE):**
+           - **NUNCA** sumes costos de monedas diferentes (ej: no sumes USD con ARS).
+           - Haz SIEMPRE: `df.groupby('moneda')['costo'].sum()`.
+           - Si te piden un total, reporta el desglose (Ej: "1000 USD y 50000 ARS").
+
+        5. **VERIFICACIÓN DE VACÍO:**
            - Si el resultado de tu filtro es vacío, responde: "No se encontraron registros en la base de datos."
-           - No inventes datos.
 
         Pregunta del usuario: {consulta}
         """
