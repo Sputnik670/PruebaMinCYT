@@ -13,7 +13,20 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import SystemMessage, HumanMessage, BaseMessage
 from langgraph.graph import StateGraph, END
 from langgraph.prebuilt import ToolNode
-from langchain.memory import ConversationSummaryBufferMemory
+
+# --- CORRECCIÓN DE IMPORTACIÓN DE MEMORIA (Blindaje) ---
+try:
+    # Intento 1: Ubicación estándar
+    from langchain.memory import ConversationSummaryBufferMemory
+except ImportError:
+    try:
+        # Intento 2: Ubicación moderna (LangChain 0.3+)
+        from langchain_community.memory import ConversationSummaryBufferMemory
+    except ImportError:
+        # Intento 3: Ubicación legacy
+        from langchain.chains.conversation.memory import ConversationSummaryBufferMemory
+# -------------------------------------------------------
+
 from langchain_community.chat_message_histories import ChatMessageHistory
 
 # --- IMPORTACIÓN DE HERRAMIENTAS ---
