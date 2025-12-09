@@ -15,9 +15,17 @@ from langgraph.graph import StateGraph, END
 from langgraph.prebuilt import ToolNode
 from langchain_community.chat_message_histories import ChatMessageHistory
 
-
-# Importación estándar para LangChain 0.3+
-from langchain.memory import ConversationSummaryBufferMemory
+# --- CORRECCIÓN IMPORTACIÓN DE MEMORIA (LangChain 0.3+) ---
+try:
+    # Intenta importar desde el paquete clásico (nueva ubicación)
+    from langchain_classic.memory import ConversationSummaryBufferMemory
+except ImportError:
+    try:
+        # Fallback para versiones intermedias
+        from langchain.memory import ConversationSummaryBufferMemory
+    except ImportError:
+        # Último recurso: langchain-community
+        from langchain_community.memory import ConversationSummaryBufferMemory
 # ------------------------------------------------------------------
 
 # --- IMPORTACIÓN DE HERRAMIENTAS ---
