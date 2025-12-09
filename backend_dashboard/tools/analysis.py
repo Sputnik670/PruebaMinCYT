@@ -1,7 +1,7 @@
 import os
 import logging
 import pandas as pd
-from datetime import datetime
+import time
 from dotenv import load_dotenv
 from supabase import create_client
 from langchain_experimental.agents import create_pandas_dataframe_agent
@@ -11,114 +11,109 @@ from langchain.tools import tool
 load_dotenv()
 logger = logging.getLogger(__name__)
 
-# Credenciales
 SUPA_URL = os.getenv("SUPABASE_URL")
 SUPA_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 
+# --- CACHÉ EN MEMORIA (TTL) ---
+# Evita golpear la BD en cada interacción del chat
+_CACHE_DF = None
+_LAST_UPDATE = 0
+CACHE_TTL = 300  # 5 minutos
+
 def get_df_optimizado():
-    """
-    Obtiene datos FRESCOS directamente de la tabla 'agenda_unificada' en Supabase.
-    """
+    global _CACHE_DF, _LAST_UPDATE
     try:
+        now = time.time()
+        # Si el caché es válido, úsalo
+        if _CACHE_DF is not None and (now - _LAST_UPDATE < CACHE_TTL):
+            return _CACHE_DF
+
         if not SUPA_URL or not SUPA_KEY:
-            logger.error("❌ Faltan credenciales de Supabase en analysis.py")
             return pd.DataFrame()
 
         supabase = create_client(SUPA_URL, SUPA_KEY)
         
-        # Consultamos la tabla maestra (Gestión + Oficial)
-        response = supabase.table("agenda_unificada").select("*").execute()
-        datos = response.data
+        # Consultamos aumentando el límite (Supabase trae 1000 por defecto)
+        # Traemos campos clave insertados por tu sync_sheets.py
+        response = supabase.table("agenda_unificada")\
+            .select("fecha, titulo, funcionario, lugar, costo, moneda, ambito, organizador, origen_dato")\
+            .limit(10000)\
+            .execute()
         
-        if not datos:
-            logger.warning("⚠️ La tabla 'agenda_unificada' está vacía o no se pudo leer.")
-            return pd.DataFrame()
+        datos = response.data
+        if not datos: return pd.DataFrame()
             
         df = pd.DataFrame(datos)
         
-        # --- LIMPIEZA Y NORMALIZACIÓN ---
+        # Normalización para el LLM
         if 'fecha' in df.columns:
             df['fecha'] = pd.to_datetime(df['fecha'], errors='coerce')
-        
         if 'costo' in df.columns:
             df['costo'] = pd.to_numeric(df['costo'], errors='coerce').fillna(0)
             
-        # Rellenar nulos para evitar errores en el LLM
-        df = df.fillna({
-            'titulo': 'Sin título',
-            'lugar': 'Desconocido',
-            'funcionario': 'No asignado',
-            'moneda': 'Sin especificar',
-            'ambito': 'Desconocido',
-            'organizador': ''
-        })
+        df = df.fillna('')
         
-        # Columnas auxiliares para búsqueda insensible a mayúsculas (Normalización)
+        # Columnas auxiliares para búsqueda insensible a mayúsculas
         df['lugar_norm'] = df['lugar'].astype(str).str.lower()
-        df['titulo_norm'] = df['titulo'].astype(str).str.lower()
         df['funcionario_norm'] = df['funcionario'].astype(str).str.lower()
         
+        _CACHE_DF = df
+        _LAST_UPDATE = now
+        logger.info(f"✅ Datos recargados: {len(df)} registros.")
         return df
         
     except Exception as e:
-        logger.error(f"❌ Error crítico leyendo Supabase: {e}")
-        return pd.DataFrame()
+        logger.error(f"Error leyendo Supabase: {e}")
+        return _CACHE_DF if _CACHE_DF is not None else pd.DataFrame()
 
 @tool
 def analista_de_datos_cliente(consulta: str):
     """
     [DEPARTAMENTO DE DATOS]
-    Motor de análisis sobre la Agenda Unificada (Gestión Interna + Agenda Oficial).
-    Usa esta herramienta para responder preguntas sobre:
-    - Viajes, Costos, Presupuestos.
-    - Eventos de la Agenda Oficial.
-    - Funcionarios, Lugares y Fechas.
+    Úsala SIEMPRE que pregunten por: agenda, viajes, gastos, funcionarios, expedientes o lugares.
     """
     try:
         df = get_df_optimizado()
-        
-        if df.empty: 
-            return "Error: No se pudieron cargar datos. Verifica que la sincronización se haya ejecutado correctamente."
+        if df.empty: return "Error: Base de datos vacía."
 
-        # --- CONTEXTO REAL (Grounding) ---
-        # Le damos al LLM una muestra de lo que hay en la BD para que se ubique
-        lista_lugares = df['lugar'].unique().tolist() if 'lugar' in df.columns else []
-        lista_monedas = df['moneda'].unique().tolist() if 'moneda' in df.columns else []
-        lista_ambitos = df['ambito'].unique().tolist() if 'ambito' in df.columns else []
-        
+        # --- DICCIONARIO DE DATOS (Anti-Alucinación) ---
+        # Le explicamos al LLM qué significa cada columna exactamente
+        data_dictionary = """
+        DICCIONARIO DE COLUMNAS (ÚSALO ESTRICTAMENTE):
+        - 'costo': Es el valor numérico del gasto. Si es 0, es que no hay dato.
+        - 'moneda': Puede ser 'ARS', 'USD', 'EUR'. ¡NO SUMES MONEDAS DISTINTAS!
+        - 'ambito': 'Oficial' (Agenda Pública), 'Gestión' (Interna), 'Nacional', 'Internacional'.
+        - 'lugar': Ciudad o País. Para buscar aquí usa: df[df['lugar_norm'].str.contains('termino', case=False)]
+        - 'funcionario': Nombre de la persona. Búsqueda parcial: df[df['funcionario_norm'].str.contains('nombre', case=False)]
+        - 'num_expediente': Código administrativo (ej: EX-2024-...).
+        - 'origen_dato': Indica de qué Excel vino el dato.
+        """
+
         llm = ChatGoogleGenerativeAI(model="models/gemini-2.0-flash-001", temperature=0)
         
         prefix = f"""
-        Eres un Analista de Datos experto. Trabajas con un DataFrame `df` que contiene la AGENDA UNIFICADA del organismo.
+        Eres un Analista de Datos SQL/Pandas riguroso. 
+        Tienes un DataFrame `df` con {len(df)} registros.
         
-        ### DATOS DISPONIBLES EN TU BASE DE DATOS:
-        - Ámbitos detectados: {lista_ambitos} (Ej: 'Oficial', 'Gestión Interna')
-        - Monedas: {lista_monedas}
-        - Lugares (muestra): {str(lista_lugares[:10])}...
-        - Columnas útiles: fecha, titulo, funcionario, lugar, costo, moneda, ambito, organizador.
-        
-        ### INSTRUCCIONES DE BÚSQUEDA (PYTHON PANDAS):
-        1. **Agenda Oficial:** Filtra usando `df[df['ambito'].str.contains('Oficial', case=False)]` o busca 'Agenda Oficial' en `origen_dato`.
-        2. **Búsqueda de Texto:** Usa siempre `.str.contains('texto', case=False, na=False)` en columnas `_norm`.
-        3. **Costos:** Agrupa SIEMPRE por moneda (`groupby('moneda')`). ¡No sumes peras con manzanas!
-        4. **Fechas:** Si piden 'próximos eventos', filtra `df['fecha'] >= pd.Timestamp.now()`.
-        
-        Consulta del usuario: {consulta}
+        {data_dictionary}
+
+        ### REGLAS DE ORO (Si las rompes, fallarás):
+        1. **Búsqueda Flexible:** Si buscan "Córdoba", busca en `lugar_norm` usando `.str.contains('cordoba', case=False)`. Nunca busques igualdad exacta (==).
+        2. **Case Insensitive:** Convierte siempre la búsqueda del usuario a minúsculas para comparar con `_norm`.
+        3. **Sumar Costos:** SIEMPRE agrupa por moneda: `df.groupby('moneda')['costo'].sum()`.
+        4. **Fechas:** Usa `pd.to_datetime`. Hoy es {pd.Timestamp.now().strftime('%Y-%m-%d')}.
+        5. **Honestidad:** Si el DataFrame vacío tras filtrar, di "No encontré registros que coincidan", NO INVENTES DATOS.
+
+        Pregunta del usuario: {consulta}
         """
 
         agent = create_pandas_dataframe_agent(
-            llm, 
-            df, 
-            verbose=True, 
-            allow_dangerous_code=True,
-            agent_executor_kwargs={"handle_parsing_errors": True},
-            prefix=prefix,
-            include_df_in_prompt=False,
-            number_of_head_rows=5
+            llm, df, verbose=True, allow_dangerous_code=True,
+            prefix=prefix, include_df_in_prompt=False, number_of_head_rows=5
         )
         
         return agent.invoke({"input": consulta})["output"]
 
     except Exception as e:
-        logger.error(f"Error en analista: {e}", exc_info=True)
-        return "Tuve un problema técnico analizando los datos."
+        logger.error(f"Error analista: {e}")
+        return "Hubo un error técnico consultando los datos."

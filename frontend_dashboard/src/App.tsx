@@ -1,10 +1,11 @@
 import { useState, useEffect } from 'react';
 import './App.css';
 import { supabase } from './supabaseClient';
-import { Session } from '@supabase/supabase-js'; // <--- FIX: Importamos el tipo Session
+import { Session } from '@supabase/supabase-js';
 import { ChatInterface } from './components/ChatInterface'; 
 import { MeetingRecorder } from './components/MeetingRecorder';
 import { MeetingHistory } from './components/MeetingHistory'; 
+import { EventModal } from './components/EventModal'; // <--- 1. IMPORTAR EL MODAL
 import { LayoutDashboard, RefreshCw, Eye, EyeOff, Bot, FileAudio, Building2, Briefcase, LogOut, Lock } from 'lucide-react';
 import { AgendaItem } from './types/types'; 
 
@@ -16,7 +17,6 @@ type VistaType = 'cliente' | 'ministerio';
 type TabType = 'recorder' | 'history';
 
 function App() {
-  // --- FIX: Definimos el tipo explícito para el estado de la sesión ---
   const [session, setSession] = useState<Session | null>(null);
   const [loadingAuth, setLoadingAuth] = useState(true);
 
@@ -29,6 +29,10 @@ function App() {
   const [activeTab, setActiveTab] = useState<TabType>('recorder'); 
   const [refreshTrigger, setRefreshTrigger] = useState(0);
 
+  // --- 2. ESTADOS PARA EL MODAL DE DETALLES ---
+  const [selectedEvent, setSelectedEvent] = useState<AgendaItem | null>(null);
+  const [isModalOpen, setIsModalOpen] = useState(false);
+
   // 1. EFECTO PARA VERIFICAR SESIÓN AL INICIAR
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -36,7 +40,6 @@ function App() {
       setLoadingAuth(false);
     });
 
-    // --- FIX: Tipamos el evento explícitamente, aunque TS suele inferirlo ---
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((_event, session) => {
@@ -66,18 +69,42 @@ function App() {
     setActiveTab('history');
   };
 
+  // --- 3. MANEJADOR DE CLIC EN FILA ---
+  const handleRowClick = (item: AgendaItem) => {
+    setSelectedEvent(item);
+    setIsModalOpen(true);
+  };
+
   const cargarDatos = async () => {
     try {
-        const [resMin, resCli] = await Promise.all([
-            fetch(`${API_URL}/api/agenda/ministerio`),
-            fetch(`${API_URL}/api/agenda/cliente`)
-        ]);
-        const jsonMin = await resMin.json();
-        const jsonCli = await resCli.json();
-        if (Array.isArray(jsonMin)) setDataMinisterio(jsonMin);
-        if (Array.isArray(jsonCli)) setDataCliente(jsonCli);
+      console.log("🔄 Cargando datos desde Supabase (agenda_unificada)...");
+      
+      // 1. Cargar "Agenda Oficial" (Filtramos por ámbito Público/Oficial)
+      const { data: oficialData, error: errorOficial } = await supabase
+        .from('agenda_unificada')
+        .select('*')
+        .in('ambito', ['Oficial', 'Internacional', 'Nacional'])
+        .order('fecha', { ascending: true });
+
+      if (errorOficial) throw errorOficial;
+
+      // 2. Cargar "Gestión Interna" (Todo lo demás)
+      const { data: gestionData, error: errorGestion } = await supabase
+        .from('agenda_unificada')
+        .select('*')
+        .not('ambito', 'in', '("Oficial","Internacional","Nacional")')
+        .order('fecha', { ascending: true });
+
+      if (errorGestion) throw errorGestion;
+
+      // Actualizamos el estado
+      setDataMinisterio(oficialData || []);
+      setDataCliente(gestionData || []);
+      
+      console.log(`✅ Datos cargados: ${oficialData?.length} Oficiales, ${gestionData?.length} Gestión.`);
+
     } catch (error) {
-        console.error("Error cargando agendas:", error);
+      console.error("❌ Error cargando agendas:", error);
     }
   };
 
@@ -198,7 +225,6 @@ function App() {
           </h1>
           <p className="text-slate-400 text-sm mt-2 ml-1">
             Plataforma de Gestión Inteligente & IA • 
-            {/* --- FIX: Agregamos validación por si session o user son null temporalmente --- */}
             <span className="text-blue-400 ml-2">Hola, {session?.user?.email}</span>
           </p>
         </div>
@@ -219,7 +245,6 @@ function App() {
             {syncing ? 'Sync' : 'Actualizar'}
           </button>
           
-          {/* --- FIX: Error 4 - Agregamos title y aria-label para accesibilidad --- */}
           <button 
             onClick={handleLogout} 
             title="Cerrar sesión"
@@ -283,7 +308,12 @@ function App() {
                 </thead>
                 <tbody className="divide-y divide-slate-200">
                   {datosVisibles.map((row, i) => (
-                    <tr key={i} className="hover:bg-slate-50 transition-colors group">
+                    // --- 4. AQUI AGREGAMOS EL CLICK Y EL CURSOR POINTER ---
+                    <tr 
+                      key={i} 
+                      onClick={() => handleRowClick(row)}
+                      className="hover:bg-slate-50 transition-colors group cursor-pointer"
+                    >
                       {columnasMostrar.map((colKey) => (
                         <td key={colKey} className="px-6 py-4 whitespace-nowrap text-slate-700 font-medium">
                           {/* @ts-ignore */}
@@ -360,6 +390,13 @@ function App() {
         </div>
       </div>
       
+      {/* --- 5. RENDERIZAR EL MODAL AL FINAL --- */}
+      <EventModal 
+        isOpen={isModalOpen} 
+        onClose={() => setIsModalOpen(false)} 
+        event={selectedEvent} 
+      />
+
       <footer className="mt-12 mb-6 text-center">
         <p className="text-xs text-slate-600 font-mono">SICYT AI SYSTEM v3.2 • MULTIMONEDA ACTIVE</p>
       </footer>

@@ -16,7 +16,6 @@ logging.basicConfig(level=logging.INFO, format='%(message)s')
 logger = logging.getLogger("sync_service")
 
 # --- CONFIGURACIÓN DE FUENTES ---
-# Agregamos ambos IDs aquí con una etiqueta para identificar el origen
 SOURCES = [
     {
         "id": "1HOiSJ-Hugkddv-kwGax6vhSV9tzthkiz", 
@@ -64,10 +63,6 @@ def get_drive_service():
     except Exception as e:
         logger.error(f"❌ Error Auth: {e}")
         return None
-
-def generar_id_unico(fecha, titulo, funcionario):
-    raw = f"{fecha}{titulo}{funcionario}".strip().lower()
-    return hashlib.md5(raw.encode()).hexdigest()
 
 def limpiar_moneda(texto):
     if pd.isna(texto) or not texto: return "USD 0.00"
@@ -121,15 +116,40 @@ def normalizar_fecha(fecha_raw, anio_hoja):
 
 def descargar_excel_memoria(service, file_id):
     try:
-        request = service.files().get_media(fileId=file_id)
+        # 1. Primero consultamos qué tipo de archivo es (Metadatos)
+        file_metadata = service.files().get(fileId=file_id, fields="mimeType, name").execute()
+        mime_type = file_metadata.get('mimeType')
+        nombre = file_metadata.get('name')
+        
+        logger.info(f"   📂 Archivo detectado: '{nombre}' (Tipo: {mime_type})")
+
+        request = None
+        
+        # 2. Lógica de decisión
+        if mime_type == 'application/vnd.google-apps.spreadsheet':
+            # ES UN GOOGLE SHEET NATIVO -> Usar export_media
+            logger.info("      🔄 Es nativo de Google. Exportando a Excel...")
+            request = service.files().export_media(
+                fileId=file_id,
+                mimeType='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+            )
+        else:
+            # ES UN EXCEL SUBIDO (u otro binario) -> Usar get_media
+            logger.info("      ⬇️ Es un archivo binario. Descargando directo...")
+            request = service.files().get_media(fileId=file_id)
+
+        # 3. Descarga en memoria
         file_stream = io.BytesIO()
         downloader = MediaIoBaseDownload(file_stream, request)
         done = False
-        while done is False: status, done = downloader.next_chunk()
+        while done is False:
+            status, done = downloader.next_chunk()
+            
         file_stream.seek(0)
         return file_stream
+
     except Exception as e:
-        logger.error(f"❌ Error descarga ({file_id}): {e}")
+        logger.error(f"❌ Error crítico descargando/exportando ({file_id}): {e}")
         return None
 
 # --- FUNCIÓN PRINCIPAL ---
@@ -154,7 +174,7 @@ def sincronizar_google_a_supabase():
 
             xls = pd.ExcelFile(excel_stream)
             
-            # KEY MAP GLOBAL (Combina términos de Gestión y Oficial)
+            # KEY MAP GLOBAL
             key_map = {
                 "FECHA": ["FECHA", "INICIO", "SALIDA", "DIA", "DESDE"], 
                 "TITULO": ["MOTIVO", "EVENTO", "TITULO", "TEMA", "ACTIVIDAD", "NOMBRE"],
@@ -162,8 +182,8 @@ def sincronizar_google_a_supabase():
                 "FUNCIONARIO": ["FUNCIONARIO", "NOMBRE", "PARTICIPANTE", "QUIEN", "APELLIDO"],
                 "COSTO": ["COSTO", "PRECIO", "VALOR", "IMPORTE", "GASTO", "MONTO"],
                 "EXP": ["EXPEDIENTE", "EE", "EXP", "SOLICITUD", "AUTORIZACION"],
-                "INSTITUCION": ["INSTITUCION", "ORGANISMO", "EMPRESA", "INVITA", "ORGANIZADOR", "ORGANIZA"], # Added Organizador
-                "AMBITO": ["AMBITO", "TIPO", "NACINTL"] # Added Ambito
+                "INSTITUCION": ["INSTITUCION", "ORGANISMO", "EMPRESA", "INVITA", "ORGANIZADOR", "ORGANIZA"],
+                "AMBITO": ["AMBITO", "TIPO", "NACINTL"]
             }
 
             print(f"   🔎 Pestañas encontradas: {xls.sheet_names}")
@@ -181,7 +201,6 @@ def sincronizar_google_a_supabase():
                     if any(x in row_str for x in key_map["FECHA"]): puntos += 2
                     if any(x in row_str for x in key_map["TITULO"]): puntos += 1
                     if any(x in row_str for x in key_map["FUNCIONARIO"]): puntos += 1
-                    if any(x in row_str for x in key_map["EXP"]): puntos += 1
                     
                     if puntos >= 2:
                         header_idx = i
@@ -242,22 +261,27 @@ def sincronizar_google_a_supabase():
                     exp = row[col_indices["EXP"]] if "EXP" in col_indices else ""
                     inst = row[col_indices["INSTITUCION"]] if "INSTITUCION" in col_indices else ""
                     
-                    # Ámbito (Lógica especial para leer NAC/INT)
+                    # Ámbito
                     ambito_final = default_ambito
                     if "AMBITO" in col_indices:
                         val_ambito = str(row[col_indices["AMBITO"]]).upper()
                         if "NAC" in val_ambito: ambito_final = "Nacional"
                         elif "INT" in val_ambito: ambito_final = "Internacional"
 
-                    # Hash
-                    salt = str(idx) 
-                    id_hash = generar_id_unico(fecha_final, titulo_raw, funcionario_raw + salt)
-                    
+                    # Limpieza Costos
                     costo_limpio = limpiar_moneda(costo_raw)
                     try: monto_float = float(costo_limpio.split()[1])
                     except: monto_float = 0.0
                     moneda_detectada = costo_limpio.split()[0]
 
+                    # --- HASH GENERATION (CONTENIDO) ---
+                    # Usamos el contenido para crear el ID único, NO el índice de fila.
+                    # Esto evita duplicados al reordenar el Excel.
+                    id_string = f"{fecha_final}{titulo_raw}{funcionario_raw}{lugar}{costo_limpio}".strip().lower()
+                    id_hash = hashlib.md5(id_string.encode()).hexdigest()
+
+                    # --- GUARDADO EN DICCIONARIO ---
+                    # Esta indentación es CRÍTICA. Debe estar dentro del loop 'for idx...'
                     registros_unicos[id_hash] = {
                         "id_hash": id_hash,
                         "fecha": fecha_final,
@@ -273,14 +297,15 @@ def sincronizar_google_a_supabase():
                         "updated_at": datetime.now().isoformat()
                     }
 
+                # --- UPSERT A BBDD (FUERA DEL LOOP DE FILAS) ---
                 batch = list(registros_unicos.values())
                 if batch:
                     try:
                         supabase.table("agenda_unificada").upsert(batch, on_conflict="id_hash").execute()
-                        print(f"      💾 {sheet_name}: {len(batch)} registros.")
+                        print(f"      💾 {sheet_name}: {len(batch)} registros insertados/actualizados.")
                         total_global_sincronizado += len(batch)
                     except Exception as e:
-                        print(f"      ⚠️ Error SQL: {e}")
+                        print(f"      ⚠️ Error SQL en {sheet_name}: {e}")
 
         except Exception as e:
             logger.error(f"❌ Error procesando {source_name}: {e}")
