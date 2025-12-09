@@ -15,17 +15,9 @@ from langgraph.graph import StateGraph, END
 from langgraph.prebuilt import ToolNode
 from langchain_community.chat_message_histories import ChatMessageHistory
 
-# --- BLINDAJE DE IMPORTACIÓN DE MEMORIA (Solución Error Render) ---
-try:
-    # Opción 1: Ubicación estándar en versiones antiguas/core
-    from langchain.memory import ConversationSummaryBufferMemory
-except ImportError:
-    try:
-        # Opción 2: Ubicación en langchain-community (versiones 0.1/0.2)
-        from langchain_community.memory import ConversationSummaryBufferMemory
-    except ImportError:
-        # Opción 3: Ubicación legacy (versiones 0.3+)
-        from langchain.chains.conversation.memory import ConversationSummaryBufferMemory
+
+# Importación estándar para LangChain 0.3+
+from langchain.memory import ConversationSummaryBufferMemory
 # ------------------------------------------------------------------
 
 # --- IMPORTACIÓN DE HERRAMIENTAS ---
