@@ -310,8 +310,8 @@ export const ChatInterface: React.FC = () => {
                 <Bot size={24} />
             </div>
             <div>
-                <h1 className="font-bold text-lg">MinCYT Asistente Virtual</h1>
-                <p className="text-xs text-blue-200">Ministerio de Ciencia, Tecnología e Innovación</p>
+                <h1 className="font-bold text-lg">SICYT Asistente Virtual</h1>
+                <p className="text-xs text-blue-200">Secretaría de Ciencia, Tecnología e Innovación</p>
             </div>
         </div>
         
@@ -424,7 +424,7 @@ export const ChatInterface: React.FC = () => {
         
         <div className="text-center mt-2">
             <p className="text-[10px] text-slate-400">
-                MinCYT AI puede cometer errores. Verifica la información importante.
+                SICYT AI puede cometer errores. Verifica la información importante.
             </p>
         </div>
       </div>

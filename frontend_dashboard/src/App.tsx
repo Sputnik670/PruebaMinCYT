@@ -108,7 +108,7 @@ function App() {
             </div>
           </div>
           <h1 className="text-3xl font-bold text-slate-100 mb-2">Acceso Restringido</h1>
-          <p className="text-slate-400 mb-8">Sistema de Gestión MinCYT. Por favor identifíquese.</p>
+          <p className="text-slate-400 mb-8">Sistema de Gestión SICyT. Por favor identifíquese.</p>
           
           <button 
             onClick={handleGoogleLogin}
@@ -123,7 +123,7 @@ function App() {
             Ingresar con Google
           </button>
         </div>
-        <p className="mt-8 text-xs text-slate-600 font-mono">MINCYT SECURE LOGIN v3.2</p>
+        <p className="mt-8 text-xs text-slate-600 font-mono">SICYT SECURE LOGIN v3.2</p>
       </div>
     );
   }
@@ -194,7 +194,7 @@ function App() {
         <div className="w-full md:w-auto">
           <h1 className="text-3xl md:text-4xl font-bold bg-gradient-to-r from-blue-400 via-indigo-400 to-purple-400 bg-clip-text text-transparent flex items-center gap-3">
             <LayoutDashboard className="text-blue-400" size={32} /> 
-            MinCYT Dashboard
+            SICYT Dashboard
           </h1>
           <p className="text-slate-400 text-sm mt-2 ml-1">
             Plataforma de Gestión Inteligente & IA • 
@@ -314,7 +314,7 @@ function App() {
                         <Bot size={20} />
                     </div>
                     <div>
-                        <h2 className="text-sm font-semibold text-slate-100">Asistente MinCYT</h2>
+                        <h2 className="text-sm font-semibold text-slate-100">Asistente SICYT</h2>
                         <p className="text-xs text-blue-400">En línea • Gemini 1.5 Flash</p>
                     </div>
                 </div>
@@ -361,7 +361,7 @@ function App() {
       </div>
       
       <footer className="mt-12 mb-6 text-center">
-        <p className="text-xs text-slate-600 font-mono">MINCYT AI SYSTEM v3.2 • MULTIMONEDA ACTIVE</p>
+        <p className="text-xs text-slate-600 font-mono">SICYT AI SYSTEM v3.2 • MULTIMONEDA ACTIVE</p>
       </footer>
     </div>
   );
