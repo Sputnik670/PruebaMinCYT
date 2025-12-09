@@ -8,7 +8,7 @@ export const ChatInterface: React.FC = () => {
   const [messages, setMessages] = useState<Message[]>([
     {
       id: '1',
-      text: '¡Hola! Soy Pitu, el asistente virtual del MinCYT. ¿En qué puedo ayudarte hoy? Puedes preguntarme sobre la agenda, subir un PDF o usar tu voz.',
+      text: '¡Hola! Soy Pitu, el asistente virtual del SICyT. ¿En qué puedo ayudarte hoy? Puedes preguntarme sobre la agenda, subir un PDF o usar tu voz.',
       sender: 'bot',
       timestamp: new Date()
     }
