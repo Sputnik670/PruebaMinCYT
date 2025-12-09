@@ -13,21 +13,20 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import SystemMessage, HumanMessage, BaseMessage
 from langgraph.graph import StateGraph, END
 from langgraph.prebuilt import ToolNode
+from langchain_community.chat_message_histories import ChatMessageHistory
 
-# --- CORRECCIÓN DE IMPORTACIÓN DE MEMORIA (Blindaje) ---
+# --- BLINDAJE DE IMPORTACIÓN DE MEMORIA (Solución Error Render) ---
 try:
-    # Intento 1: Ubicación estándar
+    # Opción 1: Ubicación estándar en versiones antiguas/core
     from langchain.memory import ConversationSummaryBufferMemory
 except ImportError:
     try:
-        # Intento 2: Ubicación moderna (LangChain 0.3+)
+        # Opción 2: Ubicación en langchain-community (versiones 0.1/0.2)
         from langchain_community.memory import ConversationSummaryBufferMemory
     except ImportError:
-        # Intento 3: Ubicación legacy
+        # Opción 3: Ubicación legacy (versiones 0.3+)
         from langchain.chains.conversation.memory import ConversationSummaryBufferMemory
-# -------------------------------------------------------
-
-from langchain_community.chat_message_histories import ChatMessageHistory
+# ------------------------------------------------------------------
 
 # --- IMPORTACIÓN DE HERRAMIENTAS ---
 from tools.general import get_search_tool
@@ -71,7 +70,8 @@ def obtener_fecha_hora_local():
     return datetime.now(tz).strftime("%A %d/%m/%Y, %H:%M hs")
 
 # --- PROMPT DEL DIRECTOR (VERSIÓN AUTORITARIA) ---
-sys_prompt = f"""Eres el **Director de Operaciones (COO)** del MinCYT.
+# Se actualizó MinCYT a SICyT
+sys_prompt = f"""Eres el **Director de Operaciones (COO)** del SICyT.
 📅 **FECHA ACTUAL:** {obtener_fecha_hora_local()}
 
 ### ⚡ DIRECTIVA SUPREMA: ACCIÓN INMEDIATA
